@@ -1,0 +1,62 @@
+# Pinned dependencies for the Fox reproduction.
+#
+# Install with:
+#     pip install --no-cache-dir -r requirements.lock
+#
+# Two groups. The GPU group is NOT pinned here: another agent is choosing the
+# torch / transformers combination, and that choice is load-bearing (the Fox
+# reference implementation patches a vendored transformers 4.29.2; stock
+# transformers makes the intervention a no-op while the run still "succeeds").
+# The CPU group is pinned, and nothing in it is needed to compute metrics
+# beyond numpy -- `bench/evaluate.py`, `bench/stats.py`, `bench/chair.py` and
+# `bench/report.py` run on a bare Python 3.10+ laptop.
+#
+# Quantization (bitsandbytes / 4-bit / 8-bit) is deliberately absent: the
+# experiment compares fp32 / fp16 / bf16 and quantization would confound it.
+
+# ---------------------------------------------------------------- GPU group --
+# RESOLVED. The GPU side needs TWO mutually incompatible environments, so it
+# lives in two separate files rather than here:
+#
+#   requirements-trackA.lock   fidelity. Python 3.10, torch 2.1.2+cu121, and the
+#                              Fox repo's own vendored transformers 4.29.2 via
+#                              `pip install -e <Fox>/transformers`. Produces the
+#                              numbers compared against the paper. No gradio.
+#
+#   requirements-trackB.lock   reimplementation. Python 3.11, torch 2.6.0,
+#                              transformers 4.57.6, llava-hf/llava-1.5-7b-hf.
+#                              Demo app, ablations, dtype experiments.
+#
+# They cannot be co-installed: Track A pins huggingface_hub==0.16.4 and
+# gradio>=5 requires huggingface-hub>=0.33.5. Keep two venvs.
+#
+# This file (requirements.lock) stays the CPU-only group below, which is all
+# that bench/evaluate.py, bench/stats.py, bench/chair.py and bench/report.py
+# need. Install it inside either venv, or on a bare laptop with no GPU.
+#
+# Record the resolved transformers path in every run: generate.py already
+# writes it to the `transformers_path` provenance field. Assert it points
+# inside the Fox repo on Track A -- a stock transformers on the path makes the
+# intervention a silent no-op while the run still reports success.
+
+# ---------------------------------------------------------------- CPU group --
+numpy==1.26.4            # bootstrap fast path in bench/stats.py
+scipy==1.11.4            # not imported by the CPU metrics; kept for analysis notebooks
+Pillow==10.4.0           # image loading for the method implementations
+tqdm==4.66.5             # progress bars (optional; generate.py prints its own)
+
+# ------------------------------------------------------------ model fetching --
+# huggingface_hub is used by setup_colab.sh to pre-download the checkpoint.
+# RESOLVED: this pin is for the CPU / fetch-only case. Do NOT use it inside
+# either GPU venv -- each track pins its own, and they differ:
+#   Track A: huggingface_hub==0.16.4    (transformers 4.29.2 calls APIs that
+#                                        current hub 2.x has removed)
+#   Track B: huggingface_hub>=0.33.5    (floor imposed by gradio>=5)
+huggingface_hub==0.25.2
+
+# -------------------------------------------------------------------- notes --
+# * nltk / pattern are NOT required: bench/chair.py ships its own tokenizer and
+#   singularizer so CHAIR scoring has no heavyweight dependency. Install nltk
+#   yourself and pass `--tokenizer nltk` to evaluate.py if you want to compare
+#   against the reference tokenization.
+# * no pytest: the test suite is stdlib unittest (`python -m unittest discover tests`).

@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "foxrepro"
+version = "0.1.0"
+description = "Reproduction and mechanism audit of Fox (ICML 2026), a training-free inference-time hallucination mitigation method for LVLMs"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+# Deliberately empty. The GPU dependencies are mutually incompatible across
+# the two tracks (Track A pins huggingface_hub==0.16.4 for the vendored
+# transformers 4.29.2; gradio>=5 requires huggingface-hub>=0.33.5), so they
+# live in requirements-trackA.lock / requirements-trackB.lock and are
+# installed explicitly. `pip install -e .` must never silently pull torch.
+dependencies = []
+
+[project.optional-dependencies]
+# CPU-side metrics only: evaluate / stats / chair / report run on a laptop
+# with no GPU and no torch.
+cpu = ["numpy>=1.24,<2"]
+
+[project.scripts]
+fox-generate = "foxrepro.bench.generate:_main"
+fox-evaluate = "foxrepro.bench.evaluate:_main"
+fox-report = "foxrepro.bench.report:_main"
+fox-storage = "foxrepro.storage:_main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+# The CHAIR synonym list and the POPE annotations must travel with the
+# package: `storage.Paths.pkg_root` resolves them relative to the installed
+# module, not to the checkout, so an editable *or* a wheel install both work.
+foxrepro = ["assets/*.txt", "assets/pope/*.json", "assets/pope/*.md"]
+
+[tool.pytest.ini_options]
+# The suite is stdlib unittest; pytest is optional and only used as a runner.
+testpaths = ["tests"]

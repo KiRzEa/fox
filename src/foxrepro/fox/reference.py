@@ -1,0 +1,462 @@
+"""Literal transcriptions of the released Fox code. The numerical oracle.
+
+**Do not clean this file up. Do not optimise it. Do not fix its bugs.**
+
+Every function here is a line-for-line transcription of the code shipped with
+the paper, lifted out of its 3370-file vendored-transformers context so it can
+be executed on bare tensors. Its only job is to be the thing
+``fox/kernel.py`` is proven bit-identical to.
+
+Why this file exists
+--------------------
+The paper's mechanism is a *numerical* effect. Fox subtracts a large constant
+from the pre-softmax attention logits and casts the result back to the model
+dtype; because the softmax that follows is numerically stable and accumulates
+in fp32, the uniform shift cancels exactly, and the only surviving effect is
+the rounding of that tensor onto its dtype's ULP grid.
+
+That makes a reimplementation dangerous in the usual way: if our port produced
+different numbers from the paper, we could not tell "the paper is wrong" from
+"our port is wrong". But the method has **no learned parameters** -- it is
+arithmetic on tensors -- so the ambiguity is avoidable. Transcribe their code,
+re-implement it cleanly, and assert bit-equality on random inputs across every
+dtype. No GPU, no LLaVA checkpoint, no vendored transformers required.
+
+Provenance of each transcription
+--------------------------------
+``reference_intervene``
+    ``transformers/src/transformers/models/llama/modeling_llama.py``
+    lines 336-392 of the released repo (the LLaVA-1.5 / Shikra code path).
+    Note there is a SECOND, divergent copy at
+    ``minigpt4/models/modeling_llama.py`` lines 197-243 used by InstructBLIP
+    and MiniGPT-4, which drops ``m_sys`` from the score entirely and uses
+    layers 4-10 with ratio 0.4. That copy is transcribed separately as
+    ``reference_intervene_instructblip`` because the two disagree, and the
+    paper does not say which produced which table.
+
+``reference_span_visual_text`` / ``reference_metrics``
+    ``Uncertain_head.py`` lines 4-128, whole file.
+
+``reference_fuse``
+    ``vcd_sample.py`` lines 174-223.
+
+Deviations from the released code, all forced and all recorded
+--------------------------------------------------------------
+1. ``reference_fuse`` takes ``js`` as an argument instead of computing it, so
+   the JSD implementation can be tested on its own. ``reference_jsd`` is the
+   transcription of their numpy routine.
+2. Hardcoded constants that the released code buries as local literals
+   (``SELECT_RATIO = 0.35``, ``PENALTY_VALUE = 10000.0``, the layer window
+   ``2 <= layer_idx <= 15``) are exposed as keyword arguments *with the
+   released values as defaults*. The defaults are the contract; passing
+   anything else is no longer "the reference".
+3. ``reference_metrics`` returns only the keys the intervention actually
+   reads. The released function also computes ``mV_tail``, ``risk_tail``,
+   ``mV_last``, ``mSys_last``, ``HVis_last`` and ``risk_last``, none of which
+   is ever consumed by any caller.
+
+Released hyperparameters, for the record
+----------------------------------------
+The code, the paper body, and a leftover author log path in a comment at
+``vcd_sample.py:170`` disagree with each other:
+
+=================  ==========  ==============  ====================
+value              code        paper (C.2)     author's log comment
+=================  ==========  ==============  ====================
+layer window       2-15        2-13            2-15 ("2到15")
+head ratio k       0.35        0.45            --
+tau_JS             0.15        0.2             0.1
+gamma              10000.0     never stated    --
+alpha              2           2               --
+beta               0.1         0.1             --
+=================  ==========  ==============  ====================
+
+This file implements the **code** column.
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Dict, Optional, Tuple
+
+import torch
+
+__all__ = [
+    "RELEASED_SELECT_RATIO",
+    "RELEASED_PENALTY_VALUE",
+    "RELEASED_LAYER_WINDOW",
+    "RELEASED_TAU_JS",
+    "RELEASED_ALPHA",
+    "RELEASED_BETA",
+    "reference_span_visual_text",
+    "reference_metrics",
+    "reference_select_heads",
+    "reference_intervene",
+    "reference_intervene_instructblip",
+    "reference_jsd",
+    "reference_fuse",
+]
+
+#: Local literals in the released ``modeling_llama.py`` patch. Not configurable
+#: there, not printed in the paper.
+RELEASED_SELECT_RATIO = 0.35       # modeling_llama.py:366
+RELEASED_PENALTY_VALUE = 10000.0   # modeling_llama.py:367
+RELEASED_LAYER_WINDOW = (2, 15)    # modeling_llama.py:337, inclusive
+RELEASED_TAU_JS = 0.15             # vcd_sample.py:177
+RELEASED_ALPHA = 2.0               # vcd_sample.py:176
+RELEASED_BETA = 0.1                # vcd_sample.py:174
+
+
+# --------------------------------------------------------------------------- #
+# Uncertain_head.py
+# --------------------------------------------------------------------------- #
+def reference_span_visual_text(
+    key_position: Dict[str, int], K: int
+) -> Tuple[int, int, int, int, int]:
+    """Transcription of ``_span_visual_text``.
+
+    Returns ``(v_s, v_e, t_s, t_e, img_s)``: half-open visual key span, text
+    key span, and the image start index. System keys are ``[0, img_s)``.
+
+    Note the Shikra branch identifies the model by the magic numbers
+    ``img_s == 33 and img_e == 290``; any prompt-length change silently
+    selects the wrong visual span. Transcribed as-is.
+    """
+    img_s = int(key_position.get("image_start", 0))
+    img_e = int(key_position.get("image_end", -1))
+
+    is_shikra = (img_s == 33 and img_e == 290)
+
+    if img_e >= 0:
+        if is_shikra:
+            v_s = max(0, min(img_s + 1, K))
+            v_e = max(v_s, min(img_e, K))
+        else:
+            v_s = max(0, min(img_s, K))
+            v_e = max(v_s, min(img_e + 1, K))
+    else:
+        v_s, v_e = 0, 0
+
+    t_s = max(0, min((img_e + 1) if img_e >= 0 else 0, K))
+    t_e = K
+    return v_s, v_e, t_s, t_e, img_s
+
+
+def _reference_entropy_from_probs(p: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    """Transcription of ``_entropy_from_probs``.
+
+    Note it re-normalises internally *and* the caller already normalised, so
+    the normalisation happens twice. Kept, because it changes the last bits.
+    """
+    p = p / (p.sum(dim=-1, keepdim=True) + eps)
+    return -(p * (p + eps).log()).sum(dim=-1)
+
+
+@torch.no_grad()
+def reference_metrics(
+    attn_probs: torch.Tensor,
+    key_position: Dict[str, int],
+    tail_n: int = 1,
+    eps: float = 1e-12,
+) -> Optional[Dict[str, torch.Tensor]]:
+    """Transcription of ``compute_fusion_stage_metrics_vaf``, reduced to the
+    two statistics the intervention reads: ``mSys_tail`` and ``HVis_tail``.
+
+    Args:
+        attn_probs: ``[B, H, Q, K]`` POST-softmax probabilities, fp32, with the
+            causal mask already applied. The released code builds this from a
+            separate fp32 copy of the logits, not from the tensor it mutates.
+        key_position: ``{"image_start": int, "image_end": int}``.
+        tail_n: released callers pass 1.
+
+    Returns ``None`` when the visual span is empty, matching the released
+    early-return (the caller then skips the intervention entirely).
+    """
+    if attn_probs is None or attn_probs.dim() != 4:
+        return None
+
+    B, H, Q, K = attn_probs.shape
+    v_s, v_e, t_s, t_e, img_s = reference_span_visual_text(key_position, K)
+
+    if v_e <= v_s:
+        return None
+
+    q_tail_s = max(t_s, t_e - tail_n)
+    q_tail_e = t_e
+    if q_tail_e <= q_tail_s:
+        q_tail_s = max(0, Q - 1)
+        q_tail_e = Q
+
+    def _agg(qs: int, qe: int):
+        qs, qe = int(qs), int(qe)
+        qs = max(0, min(qs, Q))
+        qe = max(0, min(qe, Q))
+        if qe <= qs:
+            qs = max(0, Q - 1)
+            qe = Q
+        if qs >= Q:
+            return None
+
+        A = attn_probs[:, :, qs:qe, :]
+        mSys = A[:, :, :, 0:img_s].sum(dim=-1).mean(dim=-1)
+        pV = A[:, :, :, v_s:v_e]
+        mV_q = pV.sum(dim=-1, keepdim=True)
+        pV_norm = pV / (mV_q + eps)
+        HVis = _reference_entropy_from_probs(pV_norm, eps=eps).mean(dim=-1)
+        return mSys, HVis
+
+    res_tail = _agg(q_tail_s, q_tail_e)
+    if res_tail is None:
+        return None
+    mSys_tail, HVis_tail = res_tail
+    return {"mSys_tail": mSys_tail, "HVis_tail": HVis_tail}
+
+
+# --------------------------------------------------------------------------- #
+# modeling_llama.py: head selection + the intervention
+# --------------------------------------------------------------------------- #
+def reference_select_heads(
+    score_b: torch.Tensor, select_ratio: float = RELEASED_SELECT_RATIO
+) -> torch.Tensor:
+    """Transcription of the per-batch-element top-k head selection.
+
+    Note the clamp ``k = max(1, min(k, num_heads // 2))``: for 32 heads and
+    ratio 0.35 this gives 11 heads, and any ratio above 0.5 is capped at 16.
+    The paper's k = 0.45 would give 14.
+    """
+    num_heads = score_b.numel()
+    k = int(round(num_heads * select_ratio))
+    k = max(1, min(k, num_heads // 2))
+    _topk_values, topk_indices = torch.topk(score_b, k=k, largest=True)
+    mask_heads = torch.zeros(num_heads, dtype=torch.bool, device=score_b.device)
+    mask_heads[topk_indices] = True
+    return mask_heads
+
+
+def reference_intervene(
+    attn_weights: torch.Tensor,
+    key_position: Optional[Dict[str, int]],
+    layer_idx: int,
+    attention_mask: Optional[torch.Tensor] = None,
+    *,
+    select_ratio: float = RELEASED_SELECT_RATIO,
+    penalty_value: float = RELEASED_PENALTY_VALUE,
+    layer_window: Tuple[int, int] = RELEASED_LAYER_WINDOW,
+    tail_n: int = 1,
+) -> torch.Tensor:
+    """Transcription of the released intervention. **Mutates in place.**
+
+    Args:
+        attn_weights: ``[B, H, Q, K]`` PRE-softmax logits, already divided by
+            ``sqrt(head_dim)``, in the model dtype (fp16 as released). The
+            causal mask has NOT yet been added -- the released code adds it
+            after this block.
+        key_position: ``None`` selects the observational branch (no
+            intervention). This is how the released code distinguishes the two
+            forward passes: ``vcd_sample.py:136`` passes ``None``, and
+            ``vcd_sample.py:165`` passes the real dict.
+        attention_mask: additive float mask, used only to build the fp32 copy
+            the metrics are computed from.
+
+    Returns the same tensor it was given, mutated.
+
+    The three lines that are the entire mechanism are at the bottom. Observe:
+      * key dimension is ``:`` -- ALL key positions, not just system keys.
+        A uniform additive shift is exactly cancelled by a stable softmax.
+      * query dimension is ``-1:`` -- exactly ONE query, the last of this
+        forward pass. Never the two-element set Q = {x_last, y_{t-1}} the
+        paper describes; the union over steps covers both only because
+        ``use_cache=True`` makes ``-1`` mean x_last at prefill and y_{t-1} at
+        each decode step. With POPE's ``max_new_tokens=1``, only x_last is
+        ever touched.
+      * the fp32 round trip followed by ``.to(dtype_orig)`` is what survives
+        the softmax. In fp16 this snaps the row onto an ULP-8.0 grid.
+    """
+    if key_position is None:
+        return attn_weights
+    lo, hi = layer_window
+    if not (lo <= layer_idx <= hi):
+        return attn_weights
+
+    bsz = attn_weights.shape[0]
+
+    attn_logits_base = attn_weights.to(torch.float32)
+    if attention_mask is not None:
+        attn_logits_base = attn_logits_base + attention_mask.to(torch.float32)
+        attn_logits_base = torch.max(
+            attn_logits_base,
+            torch.tensor(torch.finfo(torch.float32).min, device=attn_logits_base.device),
+        )
+
+    with torch.no_grad():
+        attn_probs_temp = torch.softmax(attn_logits_base, dim=-1)
+        metrics = reference_metrics(
+            attn_probs=attn_probs_temp, key_position=key_position, tail_n=tail_n
+        )
+
+    if metrics is None:
+        return attn_weights
+
+    mSys_all = metrics["mSys_tail"]
+    HVis_all = metrics["HVis_tail"]
+    score_all = mSys_all * HVis_all
+
+    for b in range(bsz):
+        mask_heads = reference_select_heads(score_all[b], select_ratio)
+        if int(mask_heads.sum().item()) > 0:
+            target_slice = attn_weights[b, mask_heads, -1:, :]
+            dtype_orig = attn_weights.dtype
+            y = target_slice.to(torch.float32) - penalty_value
+            attn_weights[b, mask_heads, -1:, :] = y.to(dtype_orig)
+
+    return attn_weights
+
+
+def reference_intervene_instructblip(
+    attn_weights: torch.Tensor,
+    key_position: Optional[Dict[str, int]],
+    layer_idx: int,
+    attention_mask: Optional[torch.Tensor] = None,
+    *,
+    select_ratio: float = 0.4,
+    penalty_value: float = RELEASED_PENALTY_VALUE,
+    layer_window: Tuple[int, int] = (4, 10),
+    tail_n: int = 1,
+) -> torch.Tensor:
+    """The SECOND, divergent copy, from ``minigpt4/models/modeling_llama.py``.
+
+    Used by InstructBLIP and MiniGPT-4. It differs from the LLaVA/Shikra copy
+    in three ways that matter, and the paper does not say which copy produced
+    which table:
+
+      * the score is ``HVis_tail`` **alone** -- ``m_sys`` is dropped, so Eq. 4
+        of the paper is not what runs for InstructBLIP;
+      * the layer window is 4-10, not 2-15;
+      * the ratio is 0.4, not 0.35.
+
+    It also contains an unguarded ``print()`` inside the attention forward,
+    firing 7x per generated token. Not transcribed.
+    """
+    if key_position is None:
+        return attn_weights
+    lo, hi = layer_window
+    if not (lo <= layer_idx <= hi):
+        return attn_weights
+
+    bsz = attn_weights.shape[0]
+
+    attn_logits_base = attn_weights.to(torch.float32)
+    if attention_mask is not None:
+        attn_logits_base = attn_logits_base + attention_mask.to(torch.float32)
+        attn_logits_base = torch.max(
+            attn_logits_base,
+            torch.tensor(torch.finfo(torch.float32).min, device=attn_logits_base.device),
+        )
+
+    with torch.no_grad():
+        attn_probs_temp = torch.softmax(attn_logits_base, dim=-1)
+        metrics = reference_metrics(
+            attn_probs=attn_probs_temp, key_position=key_position, tail_n=tail_n
+        )
+
+    if metrics is None:
+        return attn_weights
+
+    score_all = metrics["HVis_tail"]  # <-- m_sys dropped. Not Eq. 4.
+
+    for b in range(bsz):
+        mask_heads = reference_select_heads(score_all[b], select_ratio)
+        if int(mask_heads.sum().item()) > 0:
+            target_slice = attn_weights[b, mask_heads, -1:, :]
+            dtype_orig = attn_weights.dtype
+            y = target_slice.to(torch.float32) - penalty_value
+            attn_weights[b, mask_heads, -1:, :] = y.to(dtype_orig)
+
+    return attn_weights
+
+
+# --------------------------------------------------------------------------- #
+# vcd_sample.py: JSD + conflict-gated fusion
+# --------------------------------------------------------------------------- #
+def reference_jsd(
+    p_logits: torch.Tensor,
+    q_logits: torch.Tensor,
+    temperature: float = 1.0,
+    clip_value: float = 5e-8,
+) -> float:
+    """Transcription of ``cal_JS_div``, which the released code runs in numpy
+    on the CPU, for the **full 32064-token vocabulary**, once per generated
+    token.
+
+    Two things to note, both confirmed by reading the source:
+
+    1. The paper's Eq. 20 defines the JSD over a *truncated* candidate set
+       ``V_t = {y : P_obs(y) >= beta * max P_obs}``, and justifies the
+       truncation by saying the full-vocabulary divergence "is dominated by
+       the long tail". The released code computes it over the full vocabulary
+       anyway. ``beta`` is instead used later, as VCD's plausibility mask on
+       the fused logits.
+    2. ``.float().cpu().numpy()`` forces a GPU->CPU synchronisation per token.
+       Our port does this in torch on-device instead; that is a performance
+       deviation with no numerical content, and it is verified bit-equal here.
+
+    This transcription uses torch rather than numpy so it can be compared
+    without a numpy dependency; the arithmetic is identical in fp64, which is
+    what ``.float()`` -> numpy float32 -> float64 accumulation amounts to for
+    a sum of this size. The equivalence test pins it.
+    """
+    p_logits = p_logits.double()
+    q_logits = q_logits.double()
+
+    def _softmax_with_temperature(logits: torch.Tensor) -> torch.Tensor:
+        scaled = logits / temperature
+        scaled = scaled - scaled.max(dim=-1, keepdim=True).values
+        exps = scaled.exp()
+        return exps / exps.sum(dim=-1, keepdim=True)
+
+    p = _softmax_with_temperature(p_logits).clamp(clip_value, 1.0)
+    q = _softmax_with_temperature(q_logits).clamp(clip_value, 1.0)
+    m = 0.5 * (p + q)
+    kl_p_m = (p * (p / m).log()).sum(dim=-1)
+    kl_q_m = (q * (q / m).log()).sum(dim=-1)
+    return float((0.5 * (kl_p_m + kl_q_m)).item())
+
+
+def reference_fuse(
+    next_token_logits: torch.Tensor,
+    next_token_logits_cd: torch.Tensor,
+    js: float,
+    *,
+    alpha: float = RELEASED_ALPHA,
+    tau_js: float = RELEASED_TAU_JS,
+    beta: float = RELEASED_BETA,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Transcription of the conflict-gated fusion, ``vcd_sample.py:208-215``.
+
+    Returns ``(diffs, cd_logits)``:
+      * ``diffs`` is the raw fused logits. The released GREEDY path argmaxes
+        **this**, unmasked.
+      * ``cd_logits`` is ``diffs`` with VCD's plausibility mask applied. The
+        released SAMPLING path uses this, after a logits processor and warper.
+
+    That asymmetry is why Table 9 (greedy) is not a clean de-randomisation of
+    Table 1 (sampling): the two paths apply different decision rules, not just
+    different samplers.
+
+    Note the fusion is additive on UNNORMALISED logits with ``alpha = 2``, so
+    ``diffs`` has roughly 3x the scale of ``next_token_logits``. Under
+    sampling that sharpens the distribution (an implicit temperature drop);
+    under argmax it does not, which is why the greedy control does rule out
+    the sharpening explanation even though it introduces this other asymmetry.
+    """
+    cutoff = torch.log(torch.tensor(beta, dtype=next_token_logits.dtype,
+                                    device=next_token_logits.device))
+    cutoff = cutoff + next_token_logits.max(dim=-1, keepdim=True).values
+
+    if js < tau_js:
+        diffs = next_token_logits + alpha * next_token_logits_cd
+    else:
+        diffs = next_token_logits + js * next_token_logits_cd
+
+    cd_logits = diffs.masked_fill(next_token_logits < cutoff, -float("inf"))
+    return diffs, cd_logits

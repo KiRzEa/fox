@@ -1,0 +1,103 @@
+# CHAIR synonym list for the 80 MS-COCO object categories.
+#
+# provenance: transcription-of-rohrbach-synonyms-txt
+# upstream: https://github.com/LisaAnne/Hallucination  ->  data/synonyms.txt
+#   (Rohrbach et al., "Object Hallucination in Image Captioning", EMNLP 2018)
+#
+# FORMAT: one line per COCO category. Fields are comma-separated. The FIRST
+# field is the canonical COCO category name (the "node word"); every other
+# field is a surface synonym that maps onto it. Lines starting with '#' and
+# blank lines are ignored. Duplicate surface forms within a line are allowed
+# and ignored; the same surface form must not appear in two different lines.
+#
+# WARNING -- READ BEFORE QUOTING ANY CHAIR NUMBER
+# CHAIR is highly sensitive to this list: adding or dropping synonyms moves
+# CHAIR_I by whole points, and published CHAIR numbers are only comparable
+# when they use the identical list. This file is a transcription of the
+# upstream list, not a byte-identical copy of it. `bench/chair.py` records the
+# SHA-256 of whatever file it actually loaded in every metrics output, and
+# `bench/report.py` prints it, so a swap is always visible after the fact.
+# If you obtain the upstream `synonyms.txt`, drop it in as
+# `data/chair_synonyms_upstream.txt` and pass `--synonyms` to evaluate.py;
+# the recorded checksum will then differ from the one in this file, which is
+# exactly the signal you want.
+person, girl, boy, man, woman, kid, child, chef, baker, people, adult, rider, children, baby, worker, passenger, sister, biker, policeman, cop, officer, lady, cowboy, bride, groom, male, female, guy, traveler, mother, father, gentleman, pitcher, player, skier, snowboarder, skater, skateboarder, foreigner, caller, offender, coworker, trespasser, patient, politician, soldier, grandchild, serviceman, walker, drinker, doctor, lawyer, judge, teacher, student, camper, driver, solider, hunter, shopper, villager
+bicycle, bike, unicycle, minibike, trike
+car, automobile, van, minivan, sedan, suv, hatchback, cab, jeep, coupe, taxicab, limo, taxi
+motorcycle, scooter, motor bike, motor cycle, motorbike, moped
+airplane, jetliner, plane, air plane, monoplane, aircraft, jet, airbus, biplane, seaplane
+bus, minibus, trolley
+train, locomotive, tramway, caboose
+truck, pickup, lorry, hauler, firetruck
+boat, ship, liner, sailboat, motorboat, dinghy, powerboat, speedboat, canoe, skiff, yacht, kayak, catamaran, pontoon, houseboat, vessel, rowboat, trawler, ferryboat, watercraft, tugboat, schooner, barge, ferry, sailboard, paddleboat, lifeboat, freighter, steamboat, riverboat, battleship, steamship
+traffic light, street light, traffic signal, stop light, streetlight, stoplight
+fire hydrant, hydrant
+stop sign
+parking meter
+bench, pew
+bird, ostrich, owl, seagull, goose, duck, parakeet, falcon, robin, pelican, waterfowl, heron, hummingbird, mallard, finch, pigeon, sparrow, seabird, osprey, blackbird, fowl, shorebird, woodpecker, egret, chickadee, quail, bluebird, kingfisher, buzzard, willet, gull, swan, bluejay, flamingo, cormorant, parrot, loon, gosling, waterbird, pheasant, rooster, sandpiper, crow, raven, turkey, oriole, cowbird, warbler, magpie, peacock, cockatiel, lorikeet, puffin, vulture, condor, macaw, peafowl, eagle, bald eagle, lark, nighthawk, hen, dove, chicken
+cat, kitten, feline, tabby
+dog, puppy, beagle, pup, chihuahua, schnauzer, dachshund, rottweiler, canine, pitbull, collie, pug, terrier, poodle, labrador, doggie, doberman, mutt, doggy, spaniel, bulldog, sheepdog, weimaraner, corgi, cocker spaniel, greyhound, retriever, brindle, hound, whippet, husky
+horse, colt, pony, racehorse, stallion, equine, mare, foal, palomino, mustang, clydesdale, bronc, bronco
+sheep, lamb, ram, ewe, goat
+cow, cattle, oxen, ox, calf, holstein, heifer, buffalo, bull, zebu, bison
+elephant
+bear, panda
+zebra
+giraffe
+backpack, knapsack
+umbrella
+handbag, wallet, purse, briefcase
+tie, bow, bow tie
+suitcase, suit case, luggage
+frisbee
+skis, ski
+snowboard
+sports ball, ball
+kite
+baseball bat
+baseball glove
+skateboard
+surfboard, longboard, skimboard, shortboard, wakeboard
+tennis racket, racket
+bottle
+wine glass
+cup
+fork
+knife, pocketknife, knive
+spoon
+bowl, container
+banana
+apple
+sandwich, burger, sub, cheeseburger, hamburger
+orange
+broccoli
+carrot
+hot dog
+pizza
+donut, doughnut, bagel
+cake, cheesecake, cupcake, shortcake, coffeecake, pancake
+chair, seat, stool
+couch, sofa, recliner, futon, loveseat, settee, chesterfield
+potted plant, houseplant
+bed
+dining table, table, desk
+toilet, urinal, commode, lavatory, potty
+tv, monitor, televison, television
+laptop, computer, notebook, netbook, macbook, laptop computer
+mouse
+remote
+keyboard
+cell phone, mobile phone, phone, cellphone, telephone, phon, smartphone, iphone
+microwave
+oven, stovetop, stove, stove top oven
+toaster
+sink
+refrigerator, fridge, freezer
+book
+clock
+vase
+scissors
+teddy bear, teddybear
+hair drier, hairdryer
+toothbrush

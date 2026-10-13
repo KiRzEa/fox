@@ -1,0 +1,34 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+.venv/
+venv/
+.env
+
+# Run artefacts live outside the repo (see foxrepro.storage), but guard against
+# a stray FOX_RUNS_ROOT pointing here. Run JSONL is the irreplaceable artefact
+# of this project -- back it up deliberately, do not let git decide.
+runs/
+reports/
+logs/
+*.jsonl
+
+# COCO subset tar and extracted images: reconstructible, 150 MB+, never in git.
+*.tar
+*.tar.gz
+images/
+annotations/
+archives/
+
+# Model weights.
+*.safetensors
+*.bin
+*.pth
+
+.ipynb_checkpoints/
+.DS_Store
+.idea/
+.vscode/

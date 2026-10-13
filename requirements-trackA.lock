@@ -1,0 +1,57 @@
+# TRACK A -- fidelity environment. Produces the numbers compared against the paper.
+#
+# Runs the Fox repo's OWN vendored transformers 4.29.2. Do not install
+# transformers from PyPI here: the intervention is patched into the vendored
+# tree, and stock transformers makes it a silent no-op while the run still
+# reports success.
+#
+#   python3.10 -m venv .venv-A && . .venv-A/bin/activate
+#   pip install -r requirements-trackA.lock
+#   pip install -e /path/to/Fox/transformers        # <-- MUST come after
+#
+# Python 3.10 is required, not a preference: transformers 4.29.2 declares
+# tokenizers>=0.11.1,<0.14, and tokenizers 0.13.3 publishes wheels for
+# cp37-cp311 only. There is no cp312/cp313 wheel, so a 3.12+ interpreter would
+# try to build it from Rust source. Stock Colab is 3.12+, so Track A does not
+# run there; use RunPod/Vast with a pytorch:2.1.2-cuda12.1 image, or
+# `uv venv --python 3.10`.
+#
+# GPU architecture warning: the torch 2.1.2+cu121 wheel ships cubins for
+# sm_50..sm_86 plus sm_90. sm_89 (L4, RTX 4090) has no native cubin and runs
+# the sm_86 one under CUDA minor-version binary compatibility -- this works in
+# practice but smoke-test one matmul before loading 14 GB of weights. It will
+# NOT run on Blackwell (sm_100/sm_120). When renting, ask for Ada / Ampere /
+# Hopper explicitly, never "latest".
+#
+# Install the CUDA build from the PyTorch index, not PyPI:
+#   pip install torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu121
+
+torch==2.1.2                 # 2.0.1+cu118 also works; avoid >=2.6 (torch.load
+                             # weights_only default flip + _pytree changes break
+                             # code of this vintage)
+torchvision==0.16.2          # the matching release for torch 2.1.2
+
+# transformers: NOT listed. `pip install -e <Fox>/transformers` instead.
+tokenizers==0.13.3           # verified: satisfies 4.29.2's >=0.11.1,<0.14 bound
+huggingface_hub==0.16.4      # contemporary with 4.29.2. Current hub (2.x) removes
+                             # APIs that 4.29.2 still calls. 0.25.2 satisfies the
+                             # declared <1.0 bound but is not runtime-verified here.
+accelerate==0.21.0
+sentencepiece==0.1.99        # LLaMA / Vicuna tokenizer
+
+numpy<2                      # torch 2.1.2 predates the numpy 2 ABI break
+Pillow==10.4.0
+
+# NO gradio in this environment. gradio>=5 requires huggingface-hub>=0.33.5,
+# which conflicts with the 0.16.4 pin above. The demo runs on Track B; if it
+# must show Track A behaviour, run Track A as a separate subprocess behind a
+# local socket rather than co-installing.
+#
+# NO bitsandbytes / quantization: the experiment varies fp32 / fp16 / bf16 and
+# quantization would change the very quantity under study.
+
+# ------------------------------------------------------------ assertions to add
+# At harness import, assert BOTH of these or you may "reproduce" the baseline:
+#   transformers.__version__ == "4.29.2"
+#   inspect.getfile(transformers.models.llama.modeling_llama) is under the repo
+# Positive control: set the intervention shift to -1e9 and assert output changes.

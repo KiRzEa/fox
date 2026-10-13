@@ -1,0 +1,74 @@
+# TRACK B -- reimplementation environment. Demo app, ablations, dtype experiments.
+#
+# Modern transformers with the intervention implemented as a custom attention
+# function registered into AttentionInterface, dispatching on module.layer_idx
+# so layers 2-13 take an eager path (pre-softmax write access) while the other
+# 20 layers keep SDPA.
+#
+#   python3.11 -m venv .venv-B && . .venv-B/bin/activate
+#   pip install -r requirements-trackB.lock
+#
+# Model: llava-hf/llava-1.5-7b-hf (NOT liuhaotian/llava-v1.5-7b -- weight
+# identical but a different image-token expansion path; see the equivalence
+# test note at the bottom).
+
+torch==2.6.0                 # framework agent verified the mechanism on 2.6-2.9
+torchvision==0.21.0          # the matching release for torch 2.6.0
+transformers==4.57.6         # released 2026-01-16; last and most-patched 4.x.
+                             # The AttentionInterface dispatch line is identical
+                             # in 5.17.0, but 4.57.x keeps compatibility with the
+                             # VCD/SID/OPERA code generation we port baselines
+                             # from. Avoid 5.19.0 (released 2026-10-06).
+accelerate==1.2.1            # not load-bearing: we use device_map={"": 0}, no sharding
+sentencepiece==0.2.0
+
+numpy==1.26.4
+Pillow==10.4.0
+tqdm==4.66.5
+
+# ---------------------------------------------------------------- demo app --
+# Pinned loosely on purpose: these two must be resolved together against the
+# transformers pin above, then frozen. Run the install once, then
+# `pip freeze | grep -E 'gradio|huggingface'` and replace these two lines with
+# the exact resolved versions. Do not guess them.
+gradio>=5.0,<6               # requires huggingface-hub>=0.33.5 (verified)
+huggingface_hub>=0.33.5,<2
+plotly>=5.24,<7              # risk-heatmap and per-token conflict-trace panels
+
+# tokenizers: deliberately unpinned. Modern transformers constrains it tightly
+# and the resolver picks correctly; freeze it after the first install.
+#
+# NO bitsandbytes / quantization.
+
+# ------------------------------------------------- precision discipline ------
+# This environment runs the dtype experiment, so pin and LOG these at startup.
+# TF32 is the trap: on Ampere+ an fp32 matmul with TF32 enabled has a ~10-bit
+# mantissa, i.e. roughly fp16 precision in the QK product, which would
+# contaminate the fp32 arm into looking like fp16.
+#
+#   torch.backends.cuda.matmul.allow_tf32 = False          # default False since 1.12
+#   torch.backends.cudnn.allow_tf32 = False                # DEFAULT IS TRUE
+#   torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
+#   torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
+#   # torch >= 2.9 additionally: torch.backends.cuda.matmul.fp32_precision = "ieee"
+#
+# Assert `not torch.is_autocast_enabled()` inside the attention function.
+#
+# ------------------------------------------------- two mandatory assertions --
+# 1. Do NOT use output_attentions=True. From transformers ~4.52 onward there is
+#    no eager fallback: sdpa_attention_forward returns (output, None) and the
+#    recorder yields an EMPTY TUPLE with only a warning_once. Compute the
+#    per-head statistics inside the attention function instead. If you do use
+#    it, assert len(out.attentions) == 32 after a warm-up forward.
+# 2. AttentionMaskInterface.register("fox", eager_mask) is NOT optional. If the
+#    name is missing from the mask registry, transformers skips mask creation
+#    and passes attention_mask=None -- causality is silently dropped and the
+#    model attends to the future while still producing fluent text.
+#
+# ------------------------------------------- cross-track equivalence test ----
+# Before trusting any Track B number: intervention OFF, fixed seed, greedy
+# decoding, same 50 prompts through Track A and Track B, assert identical token
+# ids. A prompt-template or image-token-expansion mismatch between the two
+# LLaVA checkpoints is the most common silent source of a 2-4 point POPE gap in
+# reproductions, and it would be mistaken for a Fox effect.
+# LLaVA-1.5 template: "USER: <image>\n{question} ASSISTANT:"

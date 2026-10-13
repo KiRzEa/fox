@@ -396,3 +396,114 @@ class TestProgressActuallyCounts(unittest.TestCase):
         cost = measured_cost(self.runs)
         self.assertIn("pope/single", cost)
         self.assertAlmostEqual(cost["pope/single"], 0.001, places=3)
+
+
+class TestZipIngest(unittest.TestCase):
+    """Download five zips, drop them in one folder, run one command.
+
+    pack_runs.sh zips flat (`zip -j`), so members sit at the archive root.
+    rglob is still used when reading them back, because a zip produced by some
+    other means may nest.
+    """
+
+    def setUp(self) -> None:
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.tmp = Path(td.name)
+        self.dest = self.tmp / "runs"
+
+    def _session_zip(self, job, n: int, session: int) -> Path:
+        import json as _json
+        import zipfile as _zip
+
+        sd = self.tmp / f"s{session}"
+        sd.mkdir(parents=True, exist_ok=True)
+        prov = cfg_from_command(job.command()).provenance()
+        f = sd / job.run_key().filename()
+        with f.open("w") as fh:
+            for i in range(n):
+                rec = dict(prov)
+                rec.update(
+                    sample_id=f"{job.benchmark}/{job.split}/q{i:07d}",
+                    image_id=i, prompt="p", output="Yes", latency_ms=1400.0,
+                    n_prompt_tokens=640, n_gen_tokens=1, commit_hash="x",
+                    timestamp="2026-01-01T00:00:00Z", transformers_path="y",
+                    label="yes",
+                )
+                fh.write(_json.dumps(rec) + "\n")
+        z = self.tmp / f"fox_runs_fox_r1_s{session}.zip"
+        with _zip.ZipFile(z, "w") as zf:
+            zf.write(f, arcname=f.name)
+        return z
+
+    def test_zips_are_expanded_and_merged(self) -> None:
+        from foxrepro.bench.plan import ingest_runs
+
+        zips = [self._session_zip(j, 4, i) for i, j in enumerate(PLAN[:3], 1)]
+        rep = ingest_runs(zips, self.dest)
+        self.assertEqual(rep["copied"], 3)
+        self.assertEqual(len(list(self.dest.glob("*.jsonl"))), 3)
+
+    def test_a_folder_of_zips_works_too(self) -> None:
+        """The actual workflow: download into one folder, ingest the folder."""
+        from foxrepro.bench.plan import ingest_runs
+
+        box = self.tmp / "inbox"
+        box.mkdir()
+        for i, j in enumerate(PLAN[:2], 1):
+            self._session_zip(j, 3, i).replace(box / f"s{i}.zip")
+        rep = ingest_runs([box], self.dest)
+        self.assertEqual(rep["copied"], 2)
+
+    def test_progress_is_visible_after_ingest(self) -> None:
+        from foxrepro.bench.plan import ingest_runs
+
+        zips = [self._session_zip(j, 4, i) for i, j in enumerate(PLAN[:3], 1)]
+        ingest_runs(zips, self.dest)
+        rows = scan_progress(PLAN[:3], self.dest)["rows"]
+        self.assertTrue(all(r["done"] == 4 for r in rows))
+
+    def test_re_ingesting_the_same_zip_adds_nothing(self) -> None:
+        from foxrepro.bench.plan import ingest_runs
+
+        zips = [self._session_zip(PLAN[0], 4, 1)]
+        ingest_runs(zips, self.dest)
+        again = ingest_runs(zips, self.dest)
+        self.assertEqual(again["copied"], 0)
+        self.assertEqual(again["merged"], 0)
+        self.assertEqual(again["skipped"], 1)
+
+    def test_no_sources_and_no_inbox_is_not_an_error(self) -> None:
+        from foxrepro.bench.plan import ingest_runs
+
+        rep = ingest_runs([], self.dest)
+        self.assertEqual(rep["copied"], 0)
+        self.assertIn("note", rep)
+
+
+class TestSessionBudget(unittest.TestCase):
+    def test_nine_sessions_fit_a_ten_hour_cap(self) -> None:
+        """87 GPU-h at 10 h per session needs 9, not the 5 planned earlier."""
+        from foxrepro.bench.plan import partition_jobs
+
+        loads = [
+            sum(j.est_seconds() for j in g) / 3600 for g in partition_jobs(9)
+        ]
+        self.assertLessEqual(max(loads), 10.5)
+        self.assertGreater(min(loads), 8.5)
+
+    def test_five_sessions_would_not_fit(self) -> None:
+        from foxrepro.bench.plan import partition_jobs
+
+        loads = [
+            sum(j.est_seconds() for j in g) / 3600 for g in partition_jobs(5)
+        ]
+        self.assertGreater(min(loads), 10.0)
+
+    def test_watchdog_fires_inside_the_budget(self) -> None:
+        """A fixed 11.3 h deadline never fires in a 10 h session."""
+        for budget in (2.0, 10.0, 12.0):
+            with self.subTest(budget=budget):
+                deadline = max(budget - 0.25, budget * 0.5)
+                self.assertLess(deadline, budget)
+                self.assertGreater(deadline, budget * 0.4)

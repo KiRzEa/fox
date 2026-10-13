@@ -32,3 +32,7 @@ archives/
 .DS_Store
 .idea/
 .vscode/
+
+# Session zips downloaded from Kaggle; ingest merges them into the runs root.
+runs_inbox/*.zip
+runs_inbox/*/

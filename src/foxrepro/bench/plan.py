@@ -76,7 +76,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 import time
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -325,7 +327,8 @@ def partition_jobs(n_sessions: int, jobs: Iterable[Job] = ()) -> List[List[Job]]
 
 
 def ingest_runs(
-    sources: Sequence[Path], dest: Optional[Path] = None, dry_run: bool = False
+    sources: Sequence[Path] = (), dest: Optional[Path] = None,
+    dry_run: bool = False,
 ) -> Dict[str, object]:
     """Merge run files produced by independent sessions into one directory.
 
@@ -356,11 +359,55 @@ def ingest_runs(
 
     dest = dest or paths().runs_root
     dest.mkdir(parents=True, exist_ok=True)
+
+    # With no sources, read the inbox: the conventional place to drop the zips
+    # downloaded from each Kaggle session, so collecting five sessions is one
+    # command rather than five unzips.
+    inbox = paths().repo_root / "runs_inbox"
+    sources = [Path(x) for x in sources] or ([inbox] if inbox.is_dir() else [])
+    if not sources:
+        return {
+            "dest": str(dest), "copied": 0, "merged": 0, "skipped": 0,
+            "files": [],
+            "note": f"nothing to ingest: pass directories or zips, or drop the "
+                    f"session zips in {inbox}",
+        }
+
+    # Expand any .zip in place so the directory walk below sees plain files.
+    # pack_runs.sh zips with -j (flat), so every member is at the archive root.
+    staged: List[Path] = []
+    tmpdirs: List[tempfile.TemporaryDirectory] = []
+    for src in sources:
+        if src.is_file() and src.suffix == ".zip":
+            td = tempfile.TemporaryDirectory()
+            tmpdirs.append(td)
+            with zipfile.ZipFile(src) as z:
+                for member in z.namelist():
+                    if member.endswith(".jsonl") and "/" not in member.strip("/"):
+                        z.extract(member, td.name)
+            staged.append(Path(td.name))
+        elif src.is_dir():
+            # A folder of zips, a folder of jsonl, or both.
+            zips = sorted(src.glob("*.zip"))
+            for zp in zips:
+                td = tempfile.TemporaryDirectory()
+                tmpdirs.append(td)
+                with zipfile.ZipFile(zp) as z:
+                    for member in z.namelist():
+                        if member.endswith(".jsonl"):
+                            z.extract(member, td.name)
+                staged.append(Path(td.name))
+            if any(src.glob("*.jsonl")):
+                staged.append(src)
+        else:
+            staged.append(src)
+    sources = staged
     report: Dict[str, object] = {
         "dest": str(dest), "copied": 0, "merged": 0, "skipped": 0, "files": []
     }
     for src_dir in sources:
-        for src in sorted(Path(src_dir).glob("*.jsonl")):
+        # rglob: a zip may have nested members even though pack_runs.sh is flat.
+        for src in sorted(Path(src_dir).rglob("*.jsonl")):
             target = dest / src.name
             if not target.exists():
                 if not dry_run:
@@ -393,6 +440,22 @@ def ingest_runs(
             report["files"].append(  # type: ignore[union-attr]
                 f"merged {len(incoming)} records into {src.name}"
             )
+
+    for td in tmpdirs:
+        td.cleanup()
+
+    if not (
+        int(report["copied"]) + int(report["merged"])  # type: ignore[arg-type]
+        + int(report["skipped"])  # type: ignore[arg-type]
+    ):
+        # "I ran ingest and nothing happened" is the obvious next question, so
+        # answer it in the result rather than returning a silent row of zeros.
+        report["note"] = (
+            f"no run files found. Looked in: "
+            f"{', '.join(str(x) for x in sources) or '(nothing)'}. "
+            f"Drop the session zips in {inbox} and re-run, or pass paths "
+            f"explicitly."
+        )
     return report
 
 
@@ -624,7 +687,7 @@ def freeze_plan(
 def run_session(
     session: int, plan_path: Path, *, budget_hours: Optional[float] = None,
     dry_run: bool = False, runs_root: Optional[Path] = None,
-    pack: bool = True, hard_deadline_hours: float = 11.3,
+    pack: bool = True, hard_deadline_hours: Optional[float] = None,
 ) -> int:
     """Execute one session's jobs, in budget, resumably.
 
@@ -638,9 +701,11 @@ def run_session(
       at most the job in flight.
     * **Per-job logs** go to a logs directory; the console keeps only the
       timeline.
-    * **A watchdog stops cleanly before Kaggle's 12 h wall.** A notebook killed
-      by the platform may lose its output entirely, which would throw away
-      every completed job in the session.
+    * **A watchdog stops cleanly before the session wall.** A notebook killed
+      by the platform may lose its output entirely, throwing away every
+      completed job. It defaults to 15 minutes inside ``budget_hours``,
+      which is enough to finish the last pack and exit -- a fixed deadline
+      would either overshoot a short session or waste a long one.
     """
     import subprocess
     import threading
@@ -666,7 +731,11 @@ def run_session(
     logs = p.logs_dir
     logs.mkdir(parents=True, exist_ok=True)
     times = p.logs_dir / "_job_times.tsv"
-    budget = (budget_hours or plan.get("budget_hours", 10.5)) * 3600
+    budget_h = budget_hours or plan.get("budget_hours", 10.0)
+    budget = budget_h * 3600
+    if hard_deadline_hours is None:
+        # Leave room for the final pack; never less than half the budget.
+        hard_deadline_hours = max(budget_h - 0.25, budget_h * 0.5)
     t0 = time.time()
     stop = threading.Event()
     procs: set = set()
@@ -771,7 +840,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
 
     a = sub.add_parser("plan", help="freeze the session split to a JSON file")
     a.add_argument("--sessions", type=int, required=True)
-    a.add_argument("--budget-hours", type=float, default=10.5,
+    a.add_argument("--budget-hours", type=float, default=10.0,
                    help="per session; Kaggle caps a session at 12 h")
     a.add_argument("--calibrate", type=Path, default=None,
                    help="a _job_times.tsv written by `run`, to replace estimates")
@@ -789,7 +858,10 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                    help="print the pack tag for this session and exit")
 
     a = sub.add_parser("ingest", help="merge run files from several sessions")
-    a.add_argument("dirs", type=Path, nargs="+")
+    a.add_argument("dirs", type=Path, nargs="*",
+               help="directories or .zip files; with none, reads "
+                    "./runs_inbox (where the downloaded session "
+                    "zips belong)")
     a.add_argument("--runs-dir", type=Path, default=None)
     a.add_argument("--dry-run", action="store_true")
 
@@ -813,9 +885,27 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
               f"{payload['n_calibrated']} calibrated estimates)\n")
         print("| session | jobs | est GPU-h |")
         print("|---|---|---|")
+        over = []
         for sess in payload["sessions"]:  # type: ignore[union-attr]
+            flag = ""
+            if float(sess["est_hours"]) > args.budget_hours:
+                flag = " **over budget**"
+                over.append(int(sess["session"]))
             print(f"| {sess['session']} | {len(sess['jobs'])} | "
-                  f"{sess['est_hours']} |")
+                  f"{sess['est_hours']}{flag} |")
+        total = sum(float(x["est_hours"]) for x in payload["sessions"])  # type: ignore[union-attr]
+        print(f"\nTotal ~{total:.0f} GPU-h over {args.sessions} sessions "
+              f"at {args.budget_hours} h each.")
+        if over:
+            need = -(-int(total) // int(args.budget_hours)) + 1
+            print(
+                f"\n[warn] session(s) {over} exceed the {args.budget_hours} h "
+                f"budget. Their last job will be DEFERRED rather than started, "
+                f"which is safe but leaves work over. Use --sessions {need} to "
+                f"fit, or run the leftovers as an extra pass: a second "
+                f"`bash run_kaggle_fox.sh <N>` on the same session picks up "
+                f"exactly what was deferred."
+            )
         print(f"\nOn Kaggle:  bash run_kaggle_fox.sh <N>   "
               f"(N = 1..{args.sessions})")
         return 0

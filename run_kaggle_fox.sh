@@ -3,17 +3,17 @@
 # Sessions are disjoint and cost-balanced, so several can run concurrently --
 # on separate accounts, or one after another on the same one.
 #
-#   local:   python3 -m foxrepro.bench.plan plan --sessions 5
-#            python3 -m foxrepro.bench.plan plan --sessions 5 \
+#   local:   python3 -m foxrepro.bench.plan plan --sessions 9
+#            python3 -m foxrepro.bench.plan plan --sessions 9 \
 #                    --calibrate <logs>/_job_times.tsv --round r2   (after session 1)
-#   Kaggle:  bash run_kaggle_fox.sh <N>        N = session number
+#   Kaggle:  bash run_kaggle_fox.sh <N>        N = session number (1..9)
 #            DRY=1 bash run_kaggle_fox.sh <N>  print the commands only
-#            BUDGET=10.5 bash run_kaggle_fox.sh <N>   hours, default from the plan
+#            BUDGET=10 bash run_kaggle_fox.sh <N>     hours, default from the plan
 #
 # Run files are re-packed to /kaggle/working/fox_runs_<tag>.zip after EVERY
-# finished job, so a cut session loses at most the job in flight. Download the
-# zips, then merge them locally:
-#   python3 -m foxrepro.bench.plan ingest <unzipped dirs...>
+# finished job, so a cut session loses at most the job in flight. Download each
+# zip into runs_inbox/ locally, then merge them with one command:
+#   python3 -m foxrepro.bench.plan ingest
 #   python3 -m foxrepro.bench.evaluate --all && python3 -m foxrepro.bench.report
 #
 # Resumable: relaunch the identical command. Completed samples are skipped, and
@@ -51,7 +51,7 @@ PY
 
 python3 -m foxrepro.data.fetch_images --what pope --workers 8 --progress-every 100
 
-python3 -m foxrepro.bench.plan run --session "$N" --budget-hours "${BUDGET:-10.5}"
+python3 -m foxrepro.bench.plan run --session "$N" --budget-hours "${BUDGET:-10}"
 RC=$?
 
 bash scripts/pack_runs.sh "$(python3 -m foxrepro.bench.plan run --session "$N" --tag)"

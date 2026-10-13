@@ -235,33 +235,43 @@ concurrent sessions of ~17.4 h each.
 Freeze the split once, locally, and commit it:
 
 ```bash
-python -m foxrepro.bench.plan plan --sessions 5      # -> scripts/run_plan.json
+python -m foxrepro.bench.plan plan --sessions 9      # -> scripts/run_plan.json
 ```
+
+87 GPU-hours at **10 h per session needs 9 sessions**, not five. `plan` warns
+when a session's estimate exceeds the budget; its last job is then deferred
+rather than started, which is safe, and a second `run_kaggle_fox.sh <N>` on the
+same session picks up exactly what was left.
 
 | session | jobs | est GPU-h |
 |---|---|---|
-| 1 | 10 | 17.6 |
-| 2 | 10 | 17.3 |
-| 3 | 11 | 17.4 |
-| 4 | 11 | 17.4 |
-| 5 | 11 | 17.6 |
+| 1–3 | 6 | 9.6 |
+| 4–5 | 5 | 9.3 |
+| 6 | 6 | 10.3 |
+| 7–8 | 6 | 10.0 |
+| 9 | 7 | 9.6 |
 
 Then one flag per Kaggle session — they are disjoint, so they can run at the
 same time:
 
 ```bash
-bash run_kaggle_fox.sh 3              # session 3
-DRY=1 bash run_kaggle_fox.sh 3        # print the commands only
-BUDGET=10.5 bash run_kaggle_fox.sh 3  # hours, default from the frozen plan
+bash run_kaggle_fox.sh 3            # session 3
+DRY=1 bash run_kaggle_fox.sh 3      # print the commands only
+BUDGET=10 bash run_kaggle_fox.sh 3  # hours, default from the frozen plan
 ```
 
-Finally, collect and aggregate:
+Each session re-packs to `/kaggle/working/fox_runs_fox_r1_s<N>.zip` after every
+finished job. Download those zips into `runs_inbox/`, then one command merges
+them all:
 
 ```bash
-python -m foxrepro.bench.plan ingest  unzipped_s1/ unzipped_s2/ ...
+python -m foxrepro.bench.plan ingest          # reads runs_inbox/, expands the zips
 python -m foxrepro.bench.evaluate --all
 python -m foxrepro.bench.report
 ```
+
+`ingest` is idempotent, so re-ingesting a zip you already merged adds nothing,
+and it says so rather than returning a silent row of zeros.
 
 Why it is shaped this way, mostly learned from the ACSA queue in a sibling
 project:
@@ -279,8 +289,10 @@ project:
   beginning a 2.3 h job with 40 minutes left burns the GPU for nothing.
 - **Results are packed after every finished job**, so a cut session loses at
   most the job in flight.
-- **A watchdog stops cleanly at 11.3 h.** A notebook killed by Kaggle's 12 h
-  wall can lose its output entirely, discarding every completed job.
+- **A watchdog stops 15 minutes inside the budget.** A notebook killed at the
+  session wall can lose its output entirely, discarding every completed job. The
+  deadline is derived from `--budget-hours`, so it fires in a 10 h session; a
+  fixed 11.3 h deadline never would.
 - **`--calibrate` feeds measured times back.** `run` appends
   `job_id<TAB>minutes<TAB>rc` to `_job_times.tsv`; passing it to `plan`
   replaces the estimates, which are scaled from one measurement and will drift.
@@ -359,7 +371,7 @@ that failure is detectable after the fact.
 | Kaggle bootstrap, host probe, notebook cells | done; host measured (2x T4, py3.13, torch 2.11, transformers 5.16.1) |
 | COCO images | fetched directly per-id (~100 MB for POPE) — no 6.2 GB zip |
 | Reproduction plan | 53 jobs, ~87 GPU-h, split across sessions by one flag |
-| Total | **274 tests**, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
+| Total | **282 tests**, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
 | `fox/attention.py` — `AttentionInterface` wiring + dual-branch decode loop | done, 18 tests |
 | `sampling`, `fox`, `vcd` | done, 21 tests against a fake model |
 | `sid` | needs the upstream SID repo; the Fox release ships only a FastV skeleton |

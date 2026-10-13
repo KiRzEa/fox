@@ -275,49 +275,100 @@ class TestPrecisionDiscipline(unittest.TestCase):
                         mask.cuda(), scaling=self.scaling,
                     )
 
-    def test_softmax_dtype_is_not_a_discriminating_axis(self) -> None:
-        """Measured, and a finding rather than a wiring detail.
+    def _eager(self, *, gamma: float, logit_dtype: str, softmax_dtype: str,
+               seed: int = 13) -> torch.Tensor:
+        q, k, v = qkv(dtype=torch.float16, seed=seed)
+        mask = causal_mask(SEQ)
+        with A.FOX.configured(
+            enabled=True, mode="as_implemented", gamma=gamma, ratio=0.35,
+            logit_dtype=logit_dtype, softmax_dtype=softmax_dtype,
+            img_start=IMG_START, img_end=IMG_END,
+            eager_layers=frozenset(range(2, 16)),
+        ):
+            out, _ = A.fox_attention_forward(
+                StubAttention(8), q, k, v, mask, scaling=self.scaling,
+            )
+        return out
 
-        The paper's Section 4.2 attributes Fox's effect to "numerical logit
-        saturation", implying the finite precision of the softmax is what lets
-        a uniform shift survive. It is not, and this pins why.
+    def test_the_mechanism_is_the_logit_cast_in_every_softmax_dtype(self) -> None:
+        """The paper's Section 4.2 claim, tested directly and host-independently.
 
-        ``torch.softmax`` subtracts the row maximum before exponentiating, so a
-        uniform ``-gamma`` shift cancels *before* the accumulation dtype can
-        matter. The only residual difference is the precision of the
-        denominator sum over ~600 keys, and the mandatory cast back to the
-        query dtype (fp16) rounds that away entirely.
+        Section 4.2 attributes Fox's effect to "numerical logit saturation",
+        which would make the finite precision of the *softmax* the thing that
+        lets a uniform shift survive. It is not: ``torch.softmax`` subtracts the
+        row maximum before exponentiating, so the shift cancels before any
+        accumulation happens. What survives is the cast applied to the *logit*
+        tensor on the way in.
 
-        So running the softmax in fp16 instead of fp32 changes nothing, and the
-        Section 4.2 account cannot be rescued by pointing at the softmax: the
-        whole surviving effect is the cast applied to the *logit* tensor, which
-        is what ``--logit-dtype`` varies and what the test above confirms does
-        bite.
+        So the discriminating comparison is within one ``logit_dtype``, against
+        a true eager no-op (``gamma=0``: subtract zero, cast back, exact):
 
-        The axis stays in the harness and in the provenance regardless -- a
-        null result that is measured and recorded is worth more than an
-        untested assumption, and it would stop being null if a future
-        transformers release dropped the fp32 upcast.
+          * storing the shifted logits in **fp32** -- ULP ~0.001 at 1e4,
+            far below the O(1)-O(30) spread of real attention logits -- must
+            barely move the output;
+          * storing them in **fp16** -- ULP 8.0 -- must wreck it.
+
+        And that pattern must hold in *both* softmax accumulation dtypes, which
+        is what makes it a statement about Fox rather than about a kernel.
+
+        Note on what this test deliberately does NOT assert. Whether the fp32
+        and fp16 softmax paths agree with *each other* is a property of the
+        host's softmax kernel, not of the method: measured bit-identical on
+        torch 2.8 / arm64 and different on torch 2.11 / x86_64, because CPUs
+        generally lack native fp16 arithmetic and upcast internally in
+        version-dependent ways. Asserting that equality would make this suite
+        flake across hosts while saying nothing about the mechanism.
         """
-        outs = {}
-        for sd in ("fp32", "native"):
-            q, k, v = qkv(dtype=torch.float16, seed=13)
-            mask = causal_mask(SEQ)
-            with A.FOX.configured(
-                enabled=True, mode="as_implemented", gamma=1e4,
-                logit_dtype="native", softmax_dtype=sd,
-                img_start=IMG_START, img_end=IMG_END,
-                eager_layers=frozenset(range(2, 16)),
-            ):
-                outs[sd], _ = A.fox_attention_forward(
-                    StubAttention(8), q, k, v, mask, scaling=self.scaling,
+        for softmax_dtype in ("fp32", "native"):
+            with self.subTest(softmax_dtype=softmax_dtype):
+                base32 = self._eager(gamma=0.0, logit_dtype="fp32",
+                                     softmax_dtype=softmax_dtype)
+                shift32 = self._eager(gamma=1e4, logit_dtype="fp32",
+                                      softmax_dtype=softmax_dtype)
+                base16 = self._eager(gamma=0.0, logit_dtype="native",
+                                     softmax_dtype=softmax_dtype)
+                shift16 = self._eager(gamma=1e4, logit_dtype="native",
+                                      softmax_dtype=softmax_dtype)
+
+                eff32 = (base32.float() - shift32.float()).abs().max().item()
+                eff16 = (base16.float() - shift16.float()).abs().max().item()
+                ratio = eff16 / max(eff32, 1e-12)
+
+                # The RATIO is the assertion that travels. Absolute magnitudes
+                # scale with the logit spread, which here is deliberately small
+                # (head_dim=16, so a 0.25 scaling) and is much larger in the
+                # real model at head_dim=128. Measured on two hosts:
+                # eff32 = 6.1e-5, eff16 = 4.9e-2, ratio ~ 800x.
+                self.assertLess(
+                    eff32, 1e-2,
+                    f"fp32 logit storage should nearly cancel the shift "
+                    f"(ULP ~1e-3 at gamma=1e4), got {eff32:.4g}",
                 )
-        self.assertTrue(
-            torch.equal(outs["fp32"], outs["native"]),
-            "softmax accumulation dtype changed the result -- if this fires, "
-            "the shift is no longer cancelling before accumulation and the "
-            "mechanism analysis in fox/reference.py needs revisiting",
-        )
+                self.assertGreater(
+                    eff16, 1e-2,
+                    f"fp16 logit storage should visibly change the output "
+                    f"(ULP 8.0), got only {eff16:.4g}",
+                )
+                self.assertGreater(
+                    ratio, 50.0,
+                    f"the fp16 cast should dominate the fp32 one by orders of "
+                    f"magnitude; ratio was {ratio:.1f}. If this fires, the "
+                    f"ULP account of the mechanism in fox/reference.py is wrong",
+                )
+
+    def test_gamma_zero_is_an_exact_eager_no_op(self) -> None:
+        """Anchors the baseline the test above leans on.
+
+        Subtracting 0.0 and casting back must be bit-exact, or ``gamma=0`` is
+        not a valid stand-in for "eager path, no intervention".
+        """
+        for logit_dtype in ("native", "fp32"):
+            with self.subTest(logit_dtype=logit_dtype):
+                a = self._eager(gamma=0.0, logit_dtype=logit_dtype,
+                                softmax_dtype="fp32")
+                b = self._eager(gamma=0.0, logit_dtype=logit_dtype,
+                                softmax_dtype="fp32")
+                self.assertTrue(torch.equal(a, b))
 
 
 class TestImageSpanLocation(unittest.TestCase):

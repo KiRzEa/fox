@@ -462,7 +462,18 @@ def extract_subset(
                 return {"extracted": False, "n_members": len(member_list), "dest": str(dest_dir)}
         for member in member_list:
             member.mode = _FIXED_MODE
-            tar.extract(member, path=dest_dir, set_attrs=False)
+            # filter="data" is the strict extraction policy: it rejects
+            # absolute paths, parent traversal, links, devices and special
+            # modes. `_safe_members` already screens for those, so this is
+            # belt-and-braces -- but passing it explicitly also silences the
+            # DeprecationWarning on 3.12/3.13 and keeps working on 3.14, where
+            # filtering becomes the default and an unfiltered extract is an
+            # error. Added as a keyword with a fallback because the parameter
+            # does not exist before 3.11.4.
+            try:
+                tar.extract(member, path=dest_dir, set_attrs=False, filter="data")
+            except TypeError:  # pragma: no cover - Python < 3.11.4
+                tar.extract(member, path=dest_dir, set_attrs=False)
     return {"extracted": True, "n_members": len(member_list), "dest": str(dest_dir)}
 
 

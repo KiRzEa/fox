@@ -63,7 +63,7 @@ Supporting findings, each pinned by a test:
 | Greedy decoding argmaxes the **unmasked** fused logits while sampling uses the β-masked ones, so Table 9 changes the decision rule, not just the sampler | `test_greedy_and_sampling_rules_differ` |
 | "Truncated JSD" (Eq. 20) is not implemented; the JSD is computed over the full 32064-token vocabulary, in numpy, on the CPU, once per generated token | `reference_jsd` |
 | Appendix C.2 states a two-sided t-test over "10 independent runs" but no table reports any variance | — |
-| The softmax accumulation dtype turns out **not** to matter: `torch.softmax` subtracts the row max before exponentiating, so the shift cancels before precision can act. Section 4.2's "numerical saturation" cannot be rescued by pointing at the softmax | `test_softmax_dtype_is_not_a_discriminating_axis` |
+| Section 4.2 blames the softmax's finite precision, but `torch.softmax` subtracts the row max before exponentiating, so the shift cancels before any accumulation. Storing the shifted logits in fp32 (ULP ~1e-3) barely moves the output while fp16 (ULP 8.0) changes it **~800× more** — in both softmax dtypes. The mechanism is the logit cast, nothing else | `test_the_mechanism_is_the_logit_cast_in_every_softmax_dtype` |
 | At the paper's own sample sizes, several reported gaps are inside sampling noise: POPE n=3000 → ±1.37 points, CHAIR_S n=500 → ±4.35 points | `bench/stats.py` |
 
 The last one reframes the project: the expected honest result is that Fox beats
@@ -239,8 +239,8 @@ that failure is detectable after the fact.
 | `fox/reference.py` + `fox/kernel.py`, bit-equivalence proven | done |
 | POPE annotations (3000 × 3 splits, 500 images, 50/50 balanced) | shipped in `assets/` |
 | Kaggle bootstrap, host probe, notebook cells | done; host measured (2x T4, py3.13, torch 2.11, transformers 5.16.1) |
-| Total | **190 tests** |
-| `fox/attention.py` — `AttentionInterface` wiring + dual-branch decode loop | done, 16 tests |
+| Total | **191 tests**, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
+| `fox/attention.py` — `AttentionInterface` wiring + dual-branch decode loop | done, 18 tests |
 | 5 method implementations (`sampling`, `fox`, `vcd`, `sid`, `opera`) | **next** — now pure wiring onto `fox.attention.fox_generate` |
 | CHAIR synonym list | transcribed, **diff against Rohrbach's upstream before quoting CHAIR numbers externally** |
 | SID baseline | needs the upstream SID repo; not portable from the Fox release |

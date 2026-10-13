@@ -200,13 +200,31 @@ def host_fingerprint() -> Dict[str, Any]:
 
     Never raises: torch may be absent (CPU-side tests, ``echo`` method).
     """
-    out: Dict[str, Any] = {"n_gpus": 0, "gpu_name": None, "tf32_flags": None}
+    out: Dict[str, Any] = {
+        "n_gpus": 0, "gpu_name": None, "tf32_flags": None,
+        "torch_version": None, "transformers_version": None,
+        "compute_capability": None,
+    }
+    # Track B deliberately does NOT pin torch: the host (Kaggle) ships a recent
+    # build with a native sm_75 cubin, and forcing a downgrade costs minutes per
+    # session for no scientific gain. The price of not pinning is that the
+    # resolved versions must be recorded, so a run stays reproducible after the
+    # fact. That is what these fields are for.
+    try:
+        import transformers  # noqa: PLC0415
+
+        out["transformers_version"] = getattr(transformers, "__version__", "unknown")
+    except BaseException:  # noqa: BLE001
+        pass
     try:
         import torch  # noqa: PLC0415  (intentionally lazy)
 
+        out["torch_version"] = torch.__version__
         if torch.cuda.is_available():
             out["n_gpus"] = torch.cuda.device_count()
             out["gpu_name"] = torch.cuda.get_device_name(0)
+            p = torch.cuda.get_device_properties(0)
+            out["compute_capability"] = f"{p.major}.{p.minor}"
         flags = {
             "matmul_tf32": bool(torch.backends.cuda.matmul.allow_tf32),
             "cudnn_tf32": bool(torch.backends.cudnn.allow_tf32),

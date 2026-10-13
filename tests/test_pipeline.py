@@ -55,6 +55,8 @@ def _record(sample_id: str, label: str, output: str, **over: Any) -> Dict[str, A
         "logit_dtype": "native", "softmax_dtype": "fp32", "mode": "off",
         # host / sharding fingerprint
         "device_map": "auto", "n_gpus": 0, "gpu_name": None, "tf32_flags": None,
+        "torch_version": None, "transformers_version": None,
+        "compute_capability": None,
     }
     rec.update(over)
     assert not [f for f in PROVENANCE_FIELDS if f not in rec]

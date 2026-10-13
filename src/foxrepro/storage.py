@@ -148,6 +148,12 @@ PROVENANCE_FIELDS: tuple[str, ...] = (
     "device_map",
     "n_gpus",
     "gpu_name",
+    # Track B does not pin torch (the host ships a usable build and a
+    # downgrade costs minutes per session), so the resolved versions are
+    # recorded instead. Without these a run cannot be reproduced later.
+    "torch_version",
+    "transformers_version",
+    "compute_capability",
     # TF32 silently reduces an fp32 matmul to ~10 mantissa bits on Ampere+,
     # which would contaminate the fp32 arm into looking like fp16. The flags
     # are pinned at startup and recorded here so that contamination is

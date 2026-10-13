@@ -12,15 +12,35 @@
 # identical but a different image-token expansion path; see the equivalence
 # test note at the bottom).
 
-torch==2.6.0                 # framework agent verified the mechanism on 2.6-2.9
-torchvision==0.21.0          # the matching release for torch 2.6.0
-transformers==4.57.6         # released 2026-01-16; last and most-patched 4.x.
-                             # The AttentionInterface dispatch line is identical
-                             # in 5.17.0, but 4.57.x keeps compatibility with the
-                             # VCD/SID/OPERA code generation we port baselines
-                             # from. Avoid 5.19.0 (released 2026-10-06).
-accelerate==1.2.1            # not load-bearing: we use device_map={"": 0}, no sharding
-sentencepiece==0.2.0
+# --- torch: DELIBERATELY NOT PINNED -------------------------------------- #
+# Measured on Kaggle (2026-10): the host ships torch 2.11.0+cu128 with native
+# cubins for sm_75 (T4), sm_80, sm_86, sm_90, sm_100, sm_120. Forcing a
+# downgrade would cost ~5 minutes of every session and risks breaking the
+# host's CUDA stack for no scientific gain -- the intervention is arithmetic on
+# an attention-logit tensor and does not depend on the torch minor version.
+#
+# What matters instead is that the exact resolved versions are RECORDED. Every
+# JSONL record carries torch_version / transformers_version / transformers_path
+# (see bench.generate.host_fingerprint), so a run is reproducible after the
+# fact even though the environment was not pinned up front.
+#
+# Floor only. Install nothing if the host already satisfies it.
+torch>=2.6
+# torchvision is NOT required: LLaVA image preprocessing goes through the
+# transformers AutoProcessor (CLIPImageProcessor), not torchvision transforms.
+
+# --- transformers: capability floor, verified against a real install ------ #
+# 4.57.6 was checked directly and exposes everything Track B needs:
+#   AttentionInterface, AttentionMaskInterface, ALL_ATTENTION_FUNCTIONS,
+#   transformers.integrations.sdpa_attention.sdpa_attention_forward,
+#   transformers.masking_utils.eager_mask, LlavaForConditionalGeneration
+# The attention dispatch is unchanged in 5.17.x, so a range is honest here and
+# an exact pin would only fight the host. `scripts/probe_host.py` asserts the
+# capabilities rather than the version number, which is the thing that
+# actually has to hold.
+transformers>=4.57.6,<6
+accelerate>=1.10              # not load-bearing: device_map only, no sharding logic
+sentencepiece>=0.2.0
 
 numpy==1.26.4
 Pillow==10.4.0

@@ -47,22 +47,126 @@ def _status(ok: bool, warn: bool = False) -> str:
 
 
 def check_python() -> dict:
+    """Python version, and which tracks it admits.
+
+    Track B (the primary environment) needs only >=3.10. Track A -- the
+    fidelity oracle that runs the paper's own vendored transformers 4.29.2 --
+    additionally needs <=3.11, because ``tokenizers==0.13.3`` publishes wheels
+    for cp37-cp311 only and would otherwise build from Rust source.
+
+    Track A being unavailable is a CAVEAT, not a blocker: thanks to the
+    bit-equivalence proof in ``tests/test_kernel_equivalence.py``, the
+    mechanism is validated without running any model, and Track A is reduced
+    to one end-to-end token-level cross-check that can run on any other host.
+    So this returns WARN, never FAIL.
+    """
     major, minor = sys.version_info[:2]
-    track_a = (major, minor) <= (3, 11) and (major, minor) >= (3, 8)
+    track_b = (major, minor) >= (3, 10)
+    track_a = (3, 8) <= (major, minor) <= (3, 11)
     return {
         "check": "python_version",
         "version": platform.python_version(),
         "implementation": platform.python_implementation(),
+        "track_b_ok": track_b,
         "track_a_ok": track_a,
-        "status": _status(track_a),
+        "status": _status(track_b, warn=track_b and not track_a),
         "note": (
-            "Track A (vendored transformers 4.29.2) is installable."
-            if track_a
-            else "Track A needs Python <=3.11: tokenizers 0.13.3 has no cp312+ "
-            "wheel and would build from Rust source. Use `uv venv --python 3.10`, "
-            "or run Track B only on this host."
+            "Both tracks installable."
+            if track_a and track_b
+            else (
+                "Track B (primary) is fine. Track A is NOT installable here: it "
+                "needs Python <=3.11 for tokenizers 0.13.3. This is a caveat, "
+                "not a blocker -- the bit-equivalence proof validates the "
+                "mechanism with no model at all, so Track A is only an "
+                "end-to-end cross-check and can run elsewhere (a local "
+                "`uv venv --python 3.10`, or a RunPod pytorch:2.1.2 image)."
+                if track_b
+                else f"Python {major}.{minor} is below the 3.10 floor; "
+                "neither track will install."
+            )
         ),
     }
+
+
+def check_preinstalled_stack() -> dict:
+    """What the host already provides, and whether it can do what Track B needs.
+
+    The decisive question is not a version number but a capability: Track B
+    implements the intervention as a custom attention function registered into
+    transformers' pluggable attention interface, which is the only mechanism
+    that grants write access to the pre-softmax attention logits at a chosen
+    (layer, head, query-position) slice. If ``AttentionInterface`` and
+    ``AttentionMaskInterface`` are both importable, the host can run Track B
+    with whatever it already has, and forcing a torch downgrade is pure cost.
+    """
+    out: dict = {"check": "preinstalled_stack", "versions": {}}
+    for mod in ("torch", "transformers", "tokenizers", "huggingface_hub",
+                "accelerate", "numpy", "gradio"):
+        try:
+            m = __import__(mod)
+            out["versions"][mod] = getattr(m, "__version__", "unknown")
+        except BaseException:  # noqa: BLE001
+            out["versions"][mod] = None
+
+    caps: dict = {}
+    try:
+        import transformers  # noqa: PLC0415
+
+        caps["AttentionInterface"] = hasattr(transformers, "AttentionInterface")
+        caps["AttentionMaskInterface"] = hasattr(transformers, "AttentionMaskInterface")
+        try:
+            from transformers.modeling_utils import (  # noqa: PLC0415
+                ALL_ATTENTION_FUNCTIONS,
+            )
+
+            caps["ALL_ATTENTION_FUNCTIONS"] = True
+            caps["registered_backends"] = sorted(
+                getattr(ALL_ATTENTION_FUNCTIONS, "valid_keys", lambda: [])()
+            ) or "unlistable"
+        except BaseException:  # noqa: BLE001
+            caps["ALL_ATTENTION_FUNCTIONS"] = False
+        try:
+            from transformers.integrations.sdpa_attention import (  # noqa: PLC0415, F401
+                sdpa_attention_forward,
+            )
+
+            caps["sdpa_attention_forward"] = True
+        except BaseException:  # noqa: BLE001
+            caps["sdpa_attention_forward"] = False
+        try:
+            from transformers.masking_utils import eager_mask  # noqa: PLC0415, F401
+
+            caps["eager_mask"] = True
+        except BaseException:  # noqa: BLE001
+            caps["eager_mask"] = False
+        try:
+            from transformers import (  # noqa: PLC0415, F401
+                LlavaForConditionalGeneration,
+            )
+
+            caps["LlavaForConditionalGeneration"] = True
+        except BaseException:  # noqa: BLE001
+            caps["LlavaForConditionalGeneration"] = False
+    except BaseException:  # noqa: BLE001
+        caps["transformers_importable"] = False
+
+    out["track_b_capabilities"] = caps
+    needed = (
+        "AttentionInterface", "AttentionMaskInterface", "sdpa_attention_forward",
+        "eager_mask", "LlavaForConditionalGeneration",
+    )
+    missing = [k for k in needed if not caps.get(k)]
+    out["missing_for_track_b"] = missing
+    out["status"] = _status(not missing, warn=bool(missing))
+    out["note"] = (
+        "The preinstalled transformers already exposes everything Track B "
+        "needs. Do NOT downgrade torch -- use what is here and pin only what "
+        "is missing."
+        if not missing
+        else "Missing: " + ", ".join(missing) + ". Install "
+        "requirements-trackB.lock, then re-run this probe."
+    )
+    return out
 
 
 def check_torch() -> dict:
@@ -182,6 +286,21 @@ def check_dtypes() -> dict:
             entry["softmax_fp32_error"] = f"{type(exc).__name__}: {exc}"
         results[name] = entry
 
+    # On pre-Ampere cards (T4 = sm_75) bf16 has no native tensor-core path,
+    # but PyTorch still accepts bf16 tensors and emulates the ops by upcasting.
+    # That is slow for a whole model and irrelevant here: the experiment needs
+    # only a CAST and an elementwise ADD on the attention logits, and a cast is
+    # exact. So an "available" bf16 arm on sm_75 is numerically valid.
+    try:
+        import torch as _t
+
+        _pre_ampere = (
+            _t.cuda.is_available()
+            and _t.cuda.get_device_properties(0).major < 8
+        )
+    except BaseException:  # noqa: BLE001
+        _pre_ampere = False
+
     fp16_ok = results["float16"]["cast_add"]
     fp32_ok = results["float32"]["cast_add"]
     bf16_ok = results["bfloat16"]["cast_add"]
@@ -195,7 +314,14 @@ def check_dtypes() -> dict:
         "bf16_arm": bf16_ok,
         "status": _status(core_ok, warn=core_ok and not bf16_ok),
         "note": (
-            "All three dtype arms available."
+            (
+                "All three dtype arms available. NOTE: this GPU is "
+                "pre-Ampere, so bf16 is emulated rather than native -- "
+                "numerically exact for a cast+add on the logits, which is "
+                "all this experiment needs, but do not set the WEIGHT "
+                "dtype to bf16 here or everything will crawl."
+                if _pre_ampere else "All three dtype arms available."
+            )
             if core_ok and bf16_ok
             else (
                 "fp16 and fp32 arms work; bf16 cast+add is NOT available on this "
@@ -289,20 +415,61 @@ def check_tf32() -> dict:
         pass
 
     risky = [k for k, v in flags.items() if v]
-    return {
-        "check": "tf32_precision_flags",
-        "flags": flags,
-        "need_pinning": risky,
-        "status": _status(True, warn=bool(risky)),
-        "note": (
+
+    # Severity depends on the architecture, and conflating the two is how a
+    # real hazard gets lost among harmless ones.
+    #
+    # TF32 exists only on Ampere+ (sm_80+). On a pre-Ampere card such as the
+    # T4 (sm_75) the allow_tf32 flags are inert: there is no TF32 path to take.
+    #
+    # allow_fp16_reduced_precision_reduction is a different matter and DOES
+    # bite on sm_75. It governs the accumulation precision inside an fp16
+    # matmul -- which is exactly the Q.K^T product whose output tensor this
+    # whole experiment studies. Leaving it True adds a second, uncontrolled
+    # precision effect on top of the one under test.
+    try:
+        import torch as _t
+
+        major = _t.cuda.get_device_properties(0).major if _t.cuda.is_available() else 0
+    except BaseException:  # noqa: BLE001
+        major = 0
+    pre_ampere = 0 < major < 8
+
+    tf32_keys = {"cuda.matmul.allow_tf32", "cudnn.allow_tf32"}
+    inert = sorted(k for k in risky if pre_ampere and k in tf32_keys)
+    material = sorted(k for k in risky if k not in inert)
+
+    if pre_ampere:
+        note = (
+            f"sm_{major}x is pre-Ampere, so the TF32 flags "
+            f"({', '.join(inert) or 'none set'}) are INERT here -- there is no "
+            "TF32 path on this GPU. What does matter on this card: "
+            f"{', '.join(material) or 'nothing'}. "
+            "allow_fp16_reduced_precision_reduction controls accumulation "
+            "inside the fp16 Q.K^T matmul, i.e. the very tensor under study, "
+            "so leaving it True stacks a second uncontrolled precision effect "
+            "on top of the one being measured. pin_precision_flags() turns all "
+            "of them off and records the result in every JSONL line."
+        )
+    else:
+        note = (
             "Set all of these to False before the dtype experiment and LOG them "
             "into every results file. cudnn.allow_tf32 defaults to True, and on "
             "Ampere+ a TF32 matmul has ~10 mantissa bits -- roughly fp16 "
             "precision in the QK product -- which would make the fp32 arm "
             "indistinguishable from fp16 for the wrong reason."
-            if risky
-            else "All precision flags already off."
-        ),
+        ) if risky else "All precision flags already off."
+
+    return {
+        "check": "tf32_precision_flags",
+        "flags": flags,
+        "compute_capability_major": major,
+        "pre_ampere": pre_ampere,
+        "inert_on_this_gpu": inert,
+        "material_on_this_gpu": material,
+        "need_pinning": risky,
+        "status": _status(True, warn=bool(material)),
+        "note": note,
     }
 
 
@@ -312,7 +479,9 @@ def main() -> int:
     args = ap.parse_args()
 
     checks = [check_python(), check_torch()]
-    if checks[-1].get("cuda_available"):
+    cuda = checks[-1].get("cuda_available")
+    checks.append(check_preinstalled_stack())
+    if cuda:
         checks += [check_gpus(), check_dtypes(), check_ulp(), check_tf32()]
 
     fails = [c for c in checks if c["status"] == "FAIL"]

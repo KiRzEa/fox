@@ -149,7 +149,8 @@ Then the data, which for POPE is images only — its labels ship in the package:
 !python -m foxrepro.storage --ensure
 !python -m foxrepro.data.fetch_images --what pope --workers 8   # ~100 MB
 !python -m foxrepro.bench.generate --method sampling --benchmark pope \
-        --split random --dtype fp16 --device-map auto --seed 42
+        --split random --model-id llava-hf/llava-1.5-7b-hf \
+        --dtype fp16 --device-map auto --seed 42 --limit 20
 ```
 
 COCO serves images individually, so the documented 6.2 GB val2014 zip is
@@ -253,6 +254,17 @@ mantissa bits — roughly fp16 precision in the QK product.
 `generate.py` calls `pin_precision_flags()` before loading any model and records
 the resulting flags in every JSONL record.
 
+**The checkpoint must be the HF-converted repo.** `llava-hf/llava-1.5-7b-hf`,
+not `liuhaotian/llava-v1.5-7b`. The latter is weight-identical but stores the
+language model under `model.layers.*` where transformers expects
+`model.language_model.layers.*`, and ships no `preprocessor_config.json`.
+`from_pretrained` does not treat that as an error: it reports the vision tower
+and projector as MISSING and **initialises them randomly**, then carries on.
+A model in that state writes fluent captions that have nothing to do with the
+image, and every metric downstream reports plausible numbers computed from
+noise. `load_llava` refuses the repo by name and, more generally, refuses any
+load that leaves parameters uninitialised.
+
 **Check `transformers_path` in the output.** On Track A, if stock HuggingFace is
 on `sys.path` instead of the vendored tree, the intervention silently does
 nothing while the run reports success. Every record carries the resolved path so
@@ -269,7 +281,7 @@ that failure is detectable after the fact.
 | POPE annotations (3000 × 3 splits, 500 images, 50/50 balanced) | shipped in `assets/` |
 | Kaggle bootstrap, host probe, notebook cells | done; host measured (2x T4, py3.13, torch 2.11, transformers 5.16.1) |
 | COCO images | fetched directly per-id (~100 MB for POPE) — no 6.2 GB zip |
-| Total | **224 tests**, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
+| Total | **230 tests**, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
 | `fox/attention.py` — `AttentionInterface` wiring + dual-branch decode loop | done, 18 tests |
 | `sampling`, `fox`, `vcd` | done, 21 tests against a fake model |
 | `sid` | needs the upstream SID repo; the Fox release ships only a FastV skeleton |

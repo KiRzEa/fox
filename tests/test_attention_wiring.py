@@ -394,3 +394,53 @@ class TestImageSpanLocation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCheckpointGuards(unittest.TestCase):
+    """Refuse a checkpoint that would load with random weights.
+
+    This is the failure that actually happened on the first real Kaggle run,
+    and the only reason it was caught is that AutoProcessor crashed a moment
+    later. from_pretrained itself reported the vision tower and projector as
+    MISSING, initialised them randomly, and carried on -- which would have
+    produced fluent captions unrelated to the image, with every metric
+    downstream reporting plausible numbers computed from noise.
+    """
+
+    def test_original_llava_repo_is_refused_before_downloading(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            A._refuse_unconverted_checkpoint("liuhaotian/llava-v1.5-7b")
+        msg = str(ctx.exception)
+        self.assertIn("RANDOMLY INITIALISED", msg)
+        self.assertIn("llava-hf/llava-1.5-7b-hf", msg)
+
+    def test_converted_repo_is_accepted(self) -> None:
+        A._refuse_unconverted_checkpoint("llava-hf/llava-1.5-7b-hf")  # no raise
+
+    def test_local_path_is_accepted(self) -> None:
+        # An attached Kaggle Dataset is a plain path and must not be refused.
+        A._refuse_unconverted_checkpoint("/kaggle/input/llava-15-7b-hf")
+
+    def test_missing_keys_are_a_hard_error(self) -> None:
+        """A warning here would be worse than a crash: a plausible number."""
+        with self.assertRaises(RuntimeError) as ctx:
+            A._assert_fully_loaded(
+                "some/repo",
+                {"missing_keys": [
+                    "model.vision_tower.embeddings.patch_embedding.weight",
+                    "model.multi_modal_projector.linear_1.weight",
+                ]},
+            )
+        msg = str(ctx.exception)
+        self.assertIn("RANDOM", msg)
+        self.assertIn("--model-id", msg)
+
+    def test_clean_load_passes(self) -> None:
+        A._assert_fully_loaded("some/repo", {"missing_keys": []})
+        A._assert_fully_loaded("some/repo", {})
+
+    def test_error_names_a_bounded_number_of_keys(self) -> None:
+        """The real report listed ~50 key families; do not paste all of them."""
+        with self.assertRaises(RuntimeError) as ctx:
+            A._assert_fully_loaded("r", {"missing_keys": [f"k{i}" for i in range(40)]})
+        self.assertIn("+32 more", str(ctx.exception))

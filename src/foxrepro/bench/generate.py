@@ -868,7 +868,15 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--dtype", choices=DTYPES, default="fp16",
                     help="fp16/bf16/fp32; quantization is deliberately not an option")
-    ap.add_argument("--model-id", default="liuhaotian/llava-v1.5-7b")
+    ap.add_argument(
+        "--model-id", default="llava-hf/llava-1.5-7b-hf",
+        help="MUST be the HuggingFace-converted repo. The original\n"
+             "liuhaotian/llava-v1.5-7b uses a different key layout "
+             "(model.layers.* vs model.language_model.layers.*) and ships "
+             "no preprocessor_config.json, so transformers loads it with a "
+             "randomly initialised vision tower and projector. load_llava() "
+               "refuses that, but do not rely on the guard -- pass the right id.",
+    )
     ap.add_argument("--prompt-template-id", default=None,
                     help="default: pope_v1 for POPE, chair_v1 for CHAIR")
     ap.add_argument("--max-new-tokens", type=int, default=None,

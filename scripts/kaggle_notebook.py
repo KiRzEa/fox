@@ -97,9 +97,14 @@ CELL_7_BASELINE = r"""
 #
 # ~1 h for all 3 POPE splits on T4x2 (prefill-dominated: 600-token prefill,
 # 1-token answer). If the session dies, re-run the identical command.
+# --model-id is explicit on purpose: the HF-CONVERTED repo. The original
+# liuhaotian/llava-v1.5-7b has a different key layout and transformers
+# loads it with a RANDOM vision tower -- fluent output unrelated to the
+# image, which no metric would catch. load_llava() refuses it outright.
 !python -m foxrepro.bench.generate \
     --method sampling --benchmark pope --split random \
-    --dtype fp16 --device-map auto --seed 42
+    --model-id llava-hf/llava-1.5-7b-hf \
+    --dtype fp16 --device-map auto --seed 42 --limit 20
 """
 
 CELL_8_FOX = r"""

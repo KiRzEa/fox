@@ -27,7 +27,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 PYTHON="${PYTHON:-python3}"
-MODEL_ID="${FOX_MODEL_ID:-liuhaotian/llava-v1.5-7b}"
+# Track B (the default) needs the HF-CONVERTED repo. The original
+# liuhaotian/llava-v1.5-7b has a different key layout and no image
+# processor, and transformers will load it with random vision weights.
+MODEL_ID="${FOX_MODEL_ID:-llava-hf/llava-1.5-7b-hf}"
 VERIFY_LEVEL="fast"
 SKIP_PIP=0
 SKIP_MODEL=0

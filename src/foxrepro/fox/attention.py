@@ -351,18 +351,77 @@ def load_llava(
                 "extremely slow. bf16 is for --logit-dtype, not --dtype."
             )
 
+    _refuse_unconverted_checkpoint(model_id)
+
     register()
     if eager_layers is not None:
         FOX.eager_layers = eager_layers
 
-    model = LlavaForConditionalGeneration.from_pretrained(
+    model, info = LlavaForConditionalGeneration.from_pretrained(
         model_id,
         dtype=torch_dtype,            # `torch_dtype` is deprecated from 4.56
         attn_implementation={"text_config": ATTN_NAME, "vision_config": "sdpa"},
         device_map=device_map,
-    ).eval()
+        output_loading_info=True,
+    )
+    _assert_fully_loaded(model_id, info)
+    model = model.eval()
     processor = AutoProcessor.from_pretrained(model_id)
     return model, processor
+
+
+#: Checkpoints known to use the original LLaVA key layout rather than the
+#: HuggingFace-converted one. Weight-identical, but not loadable as a
+#: ``LlavaForConditionalGeneration``.
+_UNCONVERTED_PREFIXES = ("liuhaotian/",)
+
+
+def _refuse_unconverted_checkpoint(model_id: str) -> None:
+    """Fail before downloading 13.5 GB that cannot be used.
+
+    ``liuhaotian/llava-v1.5-7b`` stores the language model under
+    ``model.layers.*`` while transformers expects
+    ``model.language_model.layers.*``, and it ships no
+    ``preprocessor_config.json``. ``from_pretrained`` does not treat that as an
+    error: it reports the vision tower and the projector as MISSING and
+    **initialises them randomly**, then carries on. A model in that state
+    produces fluent captions that have nothing to do with the image, and no
+    metric downstream can tell.
+    """
+    if model_id.startswith(_UNCONVERTED_PREFIXES):
+        raise ValueError(
+            f"{model_id!r} is the original LLaVA checkpoint, not the "
+            f"HuggingFace-converted one. transformers would load it with a "
+            f"RANDOMLY INITIALISED vision tower and projector -- producing "
+            f"fluent output unrelated to the image, which no metric would "
+            f"catch.\n"
+            f"Use 'llava-hf/llava-1.5-7b-hf' (weight-identical, correct key "
+            f"layout, ships an image processor).\n"
+            f"The original repo belongs to Track A, which runs the paper's own "
+            f"vendored transformers 4.29.2 and expects that layout."
+        )
+
+
+def _assert_fully_loaded(model_id: str, info: Dict[str, Any]) -> None:
+    """Refuse a checkpoint that did not populate every parameter.
+
+    The general form of the guard above: any key transformers reports as
+    missing was newly initialised, i.e. random. Silence here is how a whole
+    benchmark run ends up measuring noise, so this is a hard error rather than
+    a warning -- the one thing worse than a crash is a plausible number.
+    """
+    missing = list(info.get("missing_keys") or ())
+    if not missing:
+        return
+    shown = ", ".join(missing[:8])
+    more = f" (+{len(missing) - 8} more)" if len(missing) > 8 else ""
+    raise RuntimeError(
+        f"{model_id!r} left {len(missing)} parameters uninitialised, so they "
+        f"are RANDOM: {shown}{more}.\n"
+        f"This is not recoverable by retrying -- the checkpoint's key layout "
+        f"does not match LlavaForConditionalGeneration. Check --model-id; it "
+        f"must be the HuggingFace-converted repo ('llava-hf/llava-1.5-7b-hf')."
+    )
 
 
 def locate_image_span(input_ids: torch.Tensor, image_token_id: int) -> Tuple[int, int]:

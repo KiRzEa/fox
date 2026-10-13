@@ -168,7 +168,7 @@ else
   echo
   echo "  To fetch into /kaggle/temp instead (ephemeral, ~5 min):"
   if [ "$TRACK" = "A" ]; then
-    echo "      huggingface-cli download liuhaotian/llava-v1.5-7b"
+    echo "      huggingface-cli download liuhaotian/llava-v1.5-7b   # Track A only"
   else
     echo "      huggingface-cli download llava-hf/llava-1.5-7b-hf"
   fi

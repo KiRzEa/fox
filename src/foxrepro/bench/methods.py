@@ -45,7 +45,65 @@ from foxrepro.bench.generate import (
 from foxrepro.data.loaders import Sample
 
 #: The conversation wrapper LLaVA-1.5 was instruction-tuned with.
+#:
+#: The official HF chat template renders exactly this and injects NO system
+#: prompt: it emits ``role.upper() + ': '`` per message and nothing else. The
+#: system prompt is a separate message the caller supplies, which is why
+#: omitting it produces a valid-looking prompt that is nonetheless not what the
+#: released code sends.
 LLAVA_V1_5_WRAPPER = "USER: <image>\n{instruction} ASSISTANT:"
+
+#: System prompts, selected by ``--system-prompt``.
+#:
+#: ``llava_v1`` is the ``conv_vicuna_v1`` system string from the original LLaVA
+#: repo, which is what the released Fox and VCD code send (they build prompts
+#: through ``conv_templates["vicuna_v1"]``). It is ~35 tokens, so it pushes the
+#: image span from index ~5 to ~40.
+#:
+#: ``none`` omits it. That is not merely a convenience: it is a direct test of
+#: the paper's central claim. Fox's score is ``S = m_sys * H_vis``, where
+#: ``m_sys`` is the attention mass on the keys *before* the image -- which the
+#: paper identifies as "the primary anchor for latent priors" and the origin of
+#: the shortcut ``X_sys -> H_R -> Y_t``. With ``none`` those keys are just
+#: ``<s>``, ``USER`` and ``:``, carrying no instruction semantics at all. If
+#: Fox's gain survives that, the system-prompt anchor is not what drives it,
+#: and the causal story loses its subject. Nobody has run that comparison.
+#:
+#: NOTE on fidelity: this string is transcribed from the LLaVA repo's
+#: conversation template, not from the Fox release (which builds it at runtime
+#: through that same template). Treat byte-identity as unverified until the
+#: Track A cross-check confirms it; the id is recorded in every record so a
+#: later correction is traceable.
+SYSTEM_PROMPTS: Dict[str, str] = {
+    "llava_v1": (
+        "A chat between a curious user and an artificial intelligence "
+        "assistant. The assistant gives helpful, detailed, and polite answers "
+        "to the user's questions."
+    ),
+    "none": "",
+}
+
+#: Default. Faithful to the released code, not to the simpler thing.
+DEFAULT_SYSTEM_PROMPT_ID = "llava_v1"
+
+
+def render_full_prompt(instruction: str, system_prompt_id: str) -> str:
+    """Assemble the complete string the processor receives.
+
+    ``conv_vicuna_v1`` separates the system prompt from the first turn with a
+    single space, so the result is one flat string rather than a chat object --
+    which is also what keeps the image-token span computable from
+    ``input_ids``.
+    """
+    try:
+        system = SYSTEM_PROMPTS[system_prompt_id]
+    except KeyError:
+        raise ValueError(
+            f"unknown system_prompt_id {system_prompt_id!r}; "
+            f"known: {sorted(SYSTEM_PROMPTS)}"
+        ) from None
+    body = LLAVA_V1_5_WRAPPER.format(instruction=instruction)
+    return f"{system} {body}" if system else body
 
 #: Released Fox defaults for LLaVA-1.5, from the CODE, not the paper. They
 #: disagree -- see ``foxrepro.fox.reference`` for the full table -- and the
@@ -135,10 +193,16 @@ class _LlavaMethod(Method):
         except Exception:  # noqa: BLE001 - teardown must not raise
             pass
 
+    def _system_prompt_id(self) -> str:
+        return getattr(self.cfg, "system_prompt_id", DEFAULT_SYSTEM_PROMPT_ID)
+
     def describe(self) -> Dict[str, Any]:
         info = dict(super().describe())
+        spid = self._system_prompt_id()
         info.update({
             "wrapper": LLAVA_V1_5_WRAPPER,
+            "system_prompt_id": spid,
+            "system_prompt": SYSTEM_PROMPTS[spid],
             "eager_layers": sorted(self._eager_layers),
             "pinned_precision_flags": self._pin_report.get("tf32_flags"),
         })
@@ -150,7 +214,7 @@ class _LlavaMethod(Method):
     def _prepare(self, sample: Sample, prompt: str) -> Dict[str, Any]:
         from PIL import Image
 
-        text = LLAVA_V1_5_WRAPPER.format(instruction=prompt)
+        text = render_full_prompt(prompt, self._system_prompt_id())
         with Image.open(sample.image_path) as im:
             image = im.convert("RGB")
         return self.processor(images=image, text=text, return_tensors="pt")

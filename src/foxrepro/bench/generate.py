@@ -120,6 +120,11 @@ class GenConfig:
     # stable fp32 softmax and only the cast's rounding survives. Varying
     # ``dtype`` alone therefore moves two things at once and shows a null
     # result that is correct but uninformative.
+    #: Which system prompt precedes the turn. A first-class field rather
+    #: than an `extra` key because the run-file variant tag is built from
+    #: GenConfig attributes, and two values that change the output MUST NOT
+    #: share a file -- resume would otherwise merge them silently.
+    system_prompt_id: str = "llava_v1"
     logit_dtype: str = "native"     # "native" == same as ``dtype``
     softmax_dtype: str = "fp32"     # what every HF version actually does
     mode: str = "as_implemented"    # see storage.INTERVENTION_MODES
@@ -144,6 +149,10 @@ class GenConfig:
             raise ValueError(f"softmax_dtype must be one of {SOFTMAX_DTYPES}")
         if self.mode not in INTERVENTION_MODES:
             raise ValueError(f"mode must be one of {INTERVENTION_MODES}")
+        if self.system_prompt_id not in ("llava_v1", "none"):
+            raise ValueError(
+                "system_prompt_id must be 'llava_v1' or 'none'"
+            )
         if self.benchmark not in BENCHMARK_SPLITS:
             raise ValueError(f"unknown benchmark {self.benchmark!r}")
         if self.split not in BENCHMARK_SPLITS[self.benchmark]:
@@ -184,6 +193,7 @@ class GenConfig:
             "logit_dtype": self.logit_dtype,
             "softmax_dtype": self.softmax_dtype,
             "mode": self.mode,
+            "system_prompt_id": self.system_prompt_id,
             "device_map": self.device_map,
             **host_fingerprint(),
         }
@@ -915,6 +925,15 @@ def build_parser() -> argparse.ArgumentParser:
              "noise_control (matched-magnitude uniform noise).",
     )
     ap.add_argument(
+        "--system-prompt", choices=("llava_v1", "none"), default="llava_v1",
+        help="llava_v1 is the conv_vicuna_v1 system string the released "
+             "Fox/VCD code sends (~35 tokens, pushing the image span from "
+             "index ~5 to ~40). 'none' omits it, which directly tests the "
+             "paper's claim that the shortcut is anchored in the system "
+             "prompt: with none, m_sys measures attention over <s>/USER/: "
+             "and nothing semantic. If Fox still gains, that story fails.",
+    )
+    ap.add_argument(
         "--device-map", default="auto",
         help="HuggingFace device_map. 'auto' shards layers across all visible "
              "GPUs, which is what makes Kaggle's 2x T4 16GB viable: a single "
@@ -960,6 +979,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         top_p=args.top_p, temperature=args.temperature, limit=args.limit,
         logit_dtype=args.logit_dtype, softmax_dtype=args.softmax_dtype,
         mode=args.mode, device_map=args.device_map,
+        system_prompt_id=args.system_prompt,
     )
     # Must happen before any model is loaded: cudnn.allow_tf32 defaults to
     # True, and on Ampere+ a TF32 matmul has ~10 mantissa bits, which would

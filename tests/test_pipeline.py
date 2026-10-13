@@ -53,6 +53,7 @@ def _record(sample_id: str, label: str, output: str, **over: Any) -> Dict[str, A
         "intervention_layers": None,
         # precision axes of the central experiment
         "logit_dtype": "native", "softmax_dtype": "fp32", "mode": "off",
+        "system_prompt_id": "llava_v1",
         # host / sharding fingerprint
         "device_map": "auto", "n_gpus": 0, "gpu_name": None, "tf32_flags": None,
         "torch_version": None, "transformers_version": None,

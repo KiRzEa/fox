@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover
 
 from foxrepro.bench.generate import GenConfig, get_method  # noqa: E402
 from foxrepro.bench.methods import (  # noqa: E402
-    FOX_DEFAULTS, LLAVA_V1_5_WRAPPER, parse_layer_window,
+    FOX_DEFAULTS, LLAVA_V1_5_WRAPPER, parse_layer_window, render_full_prompt,
 )
 from foxrepro.data.loaders import Sample  # noqa: E402
 
@@ -166,9 +166,12 @@ class _Base(unittest.TestCase):
         self._orig_prepare = M._LlavaMethod._prepare
 
         def _prepare(inner_self, sample, prompt):  # noqa: ANN001
+            # Only the PIL image read is stubbed out; the prompt still goes
+            # through the real render_full_prompt, so the system-prompt arms
+            # are actually exercised rather than bypassed.
             return inner_self.processor(
                 images=None,
-                text=LLAVA_V1_5_WRAPPER.format(instruction=prompt),
+                text=render_full_prompt(prompt, inner_self._system_prompt_id()),
                 return_tensors="pt",
             )
 
@@ -214,11 +217,14 @@ class TestBranchStructure(_Base):
 
 class TestPromptWrapper(_Base):
     def test_llava_wrapper_is_applied(self) -> None:
+        """The turn structure, independent of which system prompt precedes it."""
         self.run_method("sampling")
         text = self.processor.seen_text[0]
-        self.assertTrue(text.startswith("USER: <image>\n"))
+        self.assertIn("USER: <image>\n", text)
         self.assertTrue(text.rstrip().endswith("ASSISTANT:"))
         self.assertIn("Is there a dog in the image?", text)
+        # the image marker must come after the system prompt, not before it
+        self.assertLess(text.index("USER:"), text.index("<image>"))
 
     def test_wrapper_is_recorded_in_provenance(self) -> None:
         m, _ = self.run_method("sampling")
@@ -351,3 +357,46 @@ class TestRegistryUnderDashM(unittest.TestCase):
             self.assertIn(name, proc.stdout, f"{name} missing from --list-methods")
         # the real ones must show their own docstrings, not a stub's
         self.assertIn("One branch, no fusion", proc.stdout)
+
+
+class TestSystemPrompt(_Base):
+    """The system prompt is part of the method, not presentation.
+
+    Fox scores heads by ``S = m_sys * H_vis``, where ``m_sys`` is the attention
+    mass on the keys *before* the image. The paper calls those keys "the
+    primary anchor for latent priors" and the origin of the shortcut it claims
+    to sever. Omitting the system prompt leaves only ``<s>``, ``USER`` and
+    ``:`` there -- measured on the first real run, an image span starting at
+    index 5 instead of ~40 -- so m_sys loses its subject and the causal story
+    loses its premise.
+
+    Both arms are kept because comparing them tests that premise directly, and
+    nobody has run that comparison.
+    """
+
+    def test_default_includes_the_llava_system_prompt(self) -> None:
+        self.run_method("sampling")
+        text = self.processor.seen_text[0]
+        self.assertTrue(text.startswith("A chat between a curious user"))
+        self.assertIn("USER: <image>\n", text)
+        self.assertTrue(text.rstrip().endswith("ASSISTANT:"))
+
+    def test_none_arm_omits_it(self) -> None:
+        self.run_method("sampling", system_prompt_id="none")
+        text = self.processor.seen_text[0]
+        self.assertTrue(text.startswith("USER: <image>\n"))
+        self.assertNotIn("curious user", text)
+
+    def test_both_are_recorded_in_provenance(self) -> None:
+        for sid in ("llava_v1", "none"):
+            with self.subTest(sid=sid):
+                m, _ = self.run_method("sampling", system_prompt_id=sid)
+                d = m.describe()
+                self.assertEqual(d["system_prompt_id"], sid)
+                self.assertEqual(bool(d["system_prompt"]), sid != "none")
+
+    def test_unknown_id_is_rejected(self) -> None:
+        from foxrepro.bench.methods import render_full_prompt
+
+        with self.assertRaises(ValueError):
+            render_full_prompt("q", "helpful_assistant")

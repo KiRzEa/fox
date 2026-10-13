@@ -63,6 +63,7 @@ Supporting findings, each pinned by a test:
 | Greedy decoding argmaxes the **unmasked** fused logits while sampling uses the β-masked ones, so Table 9 changes the decision rule, not just the sampler | `test_greedy_and_sampling_rules_differ` |
 | "Truncated JSD" (Eq. 20) is not implemented; the JSD is computed over the full 32064-token vocabulary, in numpy, on the CPU, once per generated token | `reference_jsd` |
 | Appendix C.2 states a two-sided t-test over "10 independent runs" but no table reports any variance | — |
+| The released code sends LLaVA's `conv_vicuna_v1` system prompt, which is what `m_sys` measures attention over. Omitting it leaves only `<s>`/`USER`/`:` before the image — measured image span starting at index **5** instead of ~40 — so `m_sys` loses its subject and the paper's shortcut `X_sys → H_R → Y_t` loses its premise. `--system-prompt none` tests that claim directly | `TestSystemPrompt` |
 | Section 4.2 blames the softmax's finite precision, but `torch.softmax` subtracts the row max before exponentiating, so the shift cancels before any accumulation. Storing the shifted logits in fp32 (ULP ~1e-3) barely moves the output while fp16 (ULP 8.0) changes it **~800× more** — in both softmax dtypes. The mechanism is the logit cast, nothing else | `test_the_mechanism_is_the_logit_cast_in_every_softmax_dtype` |
 | At the paper's own sample sizes, several reported gaps are inside sampling noise: POPE n=3000 → ±1.37 points, CHAIR_S n=500 → ±4.35 points | `bench/stats.py` |
 
@@ -281,7 +282,7 @@ that failure is detectable after the fact.
 | POPE annotations (3000 × 3 splits, 500 images, 50/50 balanced) | shipped in `assets/` |
 | Kaggle bootstrap, host probe, notebook cells | done; host measured (2x T4, py3.13, torch 2.11, transformers 5.16.1) |
 | COCO images | fetched directly per-id (~100 MB for POPE) — no 6.2 GB zip |
-| Total | **235 tests**, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
+| Total | **240 tests**, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
 | `fox/attention.py` — `AttentionInterface` wiring + dual-branch decode loop | done, 18 tests |
 | `sampling`, `fox`, `vcd` | done, 21 tests against a fake model |
 | `sid` | needs the upstream SID repo; the Fox release ships only a FastV skeleton |

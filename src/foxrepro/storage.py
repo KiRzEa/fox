@@ -138,6 +138,10 @@ PROVENANCE_FIELDS: tuple[str, ...] = (
     # The paper's effect is a dtype effect, so dtype cannot be one field.
     # These three are independent and all three must be explicit in every
     # record, or a run is not interpretable after the fact.
+    # The system prompt is what Fox's m_sys term measures attention over, so
+    # it is part of the method, not presentation. Omitting it leaves only
+    # <s>/USER/: before the image and m_sys loses its subject entirely.
+    "system_prompt_id",
     "logit_dtype",      # pre-softmax attention logit storage -- the mechanism
     "softmax_dtype",    # softmax accumulation (HF hard-upcasts to fp32)
     "mode",             # which intervention arm; see INTERVENTION_MODES
@@ -173,7 +177,7 @@ VARIANT_FIELDS: tuple[str, ...] = (
     # the precision/arm axes. These MUST be here: the whole experiment is a
     # sweep over them at otherwise identical settings, so without them every
     # arm would resume from -- and overwrite -- the previous arm's file.
-    "logit_dtype", "softmax_dtype", "mode",
+    "logit_dtype", "softmax_dtype", "mode", "system_prompt_id",
 )
 
 #: Default generation length per benchmark, matching the reference code:

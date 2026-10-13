@@ -89,8 +89,16 @@ class TestArmsDoNotCollide(unittest.TestCase):
         ]
         self.assertEqual(len(set(names)), len(names), "variant tag collision")
 
+    def test_system_prompt_arms_are_distinct(self) -> None:
+        """m_sys measures attention over the pre-image keys, so the system
+        prompt is part of the method. The two arms must not share a file."""
+        a = self._fname(system_prompt_id="llava_v1")
+        b = self._fname(system_prompt_id="none")
+        self.assertNotEqual(a, b)
+
     def test_axes_are_declared_as_variant_fields(self) -> None:
-        for fld in ("logit_dtype", "softmax_dtype", "mode", "gamma", "decoding"):
+        for fld in ("logit_dtype", "softmax_dtype", "mode", "gamma",
+                    "decoding", "system_prompt_id"):
             self.assertIn(fld, VARIANT_FIELDS, f"{fld} missing from VARIANT_FIELDS")
 
 
@@ -121,7 +129,7 @@ class TestProvenanceCompleteness(unittest.TestCase):
         cfg = GenConfig(**BASE)  # type: ignore[arg-type]
         prov = cfg.provenance()
         for fld in ("logit_dtype", "softmax_dtype", "mode", "device_map",
-                    "n_gpus", "gpu_name", "tf32_flags"):
+                    "n_gpus", "gpu_name", "tf32_flags", "system_prompt_id"):
             self.assertIn(fld, prov, f"{fld} missing from provenance()")
             self.assertIn(fld, PROVENANCE_FIELDS)
 

@@ -57,23 +57,25 @@ CELL_4_SELFTEST = r"""
 CELL_5_DATA = r"""
 # --- CELL 5: data --------------------------------------------------------
 # POPE annotations ship inside the package (3000 questions x 3 splits, 500
-# images, balanced 1500 yes / 1500 no), so nothing to do for POPE.
+# images, balanced 1500 yes / 1500 no), so POPE needs IMAGES ONLY.
 #
-# CHAIR needs COCO val2014 images. You do NOT need all 40k / 6 GB: CHAIR uses
-# 500 and POPE uses 500, so the union is <= 1000 images (~150-200 MB).
-#
-# Do this ONCE, anywhere, then upload the tar as a private Kaggle Dataset and
-# attach it read-only -- it then costs nothing per session:
-#
-#   python -m foxrepro.data.build_coco_subset build \
-#       --val2014-dir <val2014> --annotations-dir <annotations> \
-#       --pope-dir src/foxrepro/assets/pope
-#
-# With the dataset attached, point the storage layer at it and extract:
+# COCO serves images individually, so skip the 6.2 GB val2014 zip entirely and
+# fetch exactly the 500 POPE references -- about 100 MB, a couple of minutes.
+# Resumable and idempotent: re-run it after any disconnect and it skips what is
+# already on disk. Truncated files are detected and refetched, which matters
+# because a half-downloaded JPEG has a valid header and PIL will open it.
 import os
 os.environ["FOX_ENV"] = "kaggle"
 !python -m foxrepro.storage --ensure
-!python -m foxrepro.data.build_coco_subset verify --level fast
+!python -m foxrepro.data.fetch_images --what pope --workers 8
+
+# For CHAIR you additionally need the ground-truth annotations (~241 MB zip,
+# the only way those two json files are distributed) and a CHAIR image list:
+#   !python -m foxrepro.data.fetch_images --what union --with-annotations
+#
+# Once a session has fetched them, upload /kaggle/temp/fox-local/data as a
+# private Kaggle Dataset and attach it read-only; later sessions then cost
+# nothing. data/build_coco_subset.py builds a checksummed tar for exactly that.
 """
 
 CELL_6_SMOKE = r"""

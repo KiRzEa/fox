@@ -143,6 +143,25 @@ Quantization is ruled out — it would change the quantity under study.
 !python -m unittest discover -s tests -t .
 ```
 
+Then the data, which for POPE is images only — its labels ship in the package:
+
+```bash
+!python -m foxrepro.storage --ensure
+!python -m foxrepro.data.fetch_images --what pope --workers 8   # ~100 MB
+!python -m foxrepro.bench.generate --method sampling --benchmark pope \
+        --split random --dtype fp16 --device-map auto --seed 42
+```
+
+COCO serves images individually, so the documented 6.2 GB val2014 zip is
+avoidable: this fetches exactly the 500 images POPE references. It is
+resumable, idempotent, and detects truncated files — a dropped connection
+leaves a JPEG with a valid header that PIL will happily open and return a
+partial image for, which would corrupt a run undetectably.
+
+CHAIR additionally needs the ground-truth annotations:
+`--what union --with-annotations` (~241 MB zip, the only way those two json
+files are distributed).
+
 `scripts/kaggle_notebook.py` holds the full set of copy-paste cells, in order,
 through to the report. Run it as a script to print them.
 
@@ -249,7 +268,8 @@ that failure is detectable after the fact.
 | `fox/reference.py` + `fox/kernel.py`, bit-equivalence proven | done |
 | POPE annotations (3000 × 3 splits, 500 images, 50/50 balanced) | shipped in `assets/` |
 | Kaggle bootstrap, host probe, notebook cells | done; host measured (2x T4, py3.13, torch 2.11, transformers 5.16.1) |
-| Total | **213 tests**, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
+| COCO images | fetched directly per-id (~100 MB for POPE) — no 6.2 GB zip |
+| Total | **224 tests**, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
 | `fox/attention.py` — `AttentionInterface` wiring + dual-branch decode loop | done, 18 tests |
 | `sampling`, `fox`, `vcd` | done, 21 tests against a fake model |
 | `sid` | needs the upstream SID repo; the Fox release ships only a FastV skeleton |

@@ -460,9 +460,22 @@ def _sample_from(
     logits: torch.Tensor, *, top_p: float, temperature: float, greedy: bool,
     generator: Optional[torch.Generator] = None,
 ) -> torch.Tensor:
-    """Nucleus sampling or argmax over a single ``[V]`` logit row."""
+    """Nucleus sampling or argmax over a single ``[V]`` logit row.
+
+    ``torch.multinomial`` requires its generator to live on the same device as
+    the probabilities. With ``device_map="auto"`` the logits come back on
+    whichever device accelerate put the head on, which is not something this
+    function should have to know -- so if the devices disagree, the single
+    32k-wide vector is moved to the generator's device. That costs nothing
+    measurable and makes a seeded run reproduce the same tokens regardless of
+    how the model happened to be sharded, which matters when comparing a
+    2x T4 run against a single-GPU one.
+    """
     if greedy:
         return logits.argmax(dim=-1)
+    out_device = logits.device
+    if generator is not None and generator.device != logits.device:
+        logits = logits.to(generator.device)
     x = logits / max(temperature, 1e-6)
     probs = F.softmax(x.float(), dim=-1)
     order = probs.argsort(descending=True)
@@ -472,7 +485,8 @@ def _sample_from(
     filtered = torch.zeros_like(probs)
     filtered[order[keep]] = sorted_probs[keep]
     filtered = filtered / filtered.sum()
-    return torch.multinomial(filtered, 1, generator=generator).squeeze(-1)
+    tok = torch.multinomial(filtered, 1, generator=generator).squeeze(-1)
+    return tok.to(out_device)
 
 
 @torch.inference_mode()
@@ -548,7 +562,11 @@ def fox_generate(
 
     gen = None
     if seed is not None:
-        gen = torch.Generator(device="cpu").manual_seed(seed)
+        # On the model's device, not CPU. The generator feeds both
+        # torch.multinomial here and the uniform_() in the noise_control arm,
+        # and both operate on device tensors -- a CPU generator raises
+        # "Expected a 'cuda' device type for generator but found 'cpu'".
+        gen = torch.Generator(device=device).manual_seed(seed)
 
     # Row 0 observational, row 1 interventional: identical token sequences, so
     # batching them is exact, and decode reads the weights once instead of

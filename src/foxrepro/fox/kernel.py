@@ -293,7 +293,24 @@ def intervene(
             if not math.isfinite(hw):
                 raise ValueError(f"gamma={gamma} overflows {store_dtype}")
             t32 = target.to(torch.float32)
-            noise = torch.empty_like(t32).uniform_(-hw, hw, generator=generator)
+            # uniform_() requires the generator on the tensor's device, same as
+            # torch.multinomial. Drop a mismatched generator rather than
+            # raising: losing per-step reproducibility of the noise is a far
+            # smaller problem than a crash 300 samples into a run, and the
+            # mismatch is reported so it cannot pass unnoticed.
+            g = generator
+            if g is not None and g.device != t32.device:
+                import warnings
+
+                warnings.warn(
+                    f"noise_control: generator is on {g.device} but the logits "
+                    f"are on {t32.device}; falling back to the global RNG, so "
+                    f"this arm is not seed-reproducible for this run",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                g = None
+            noise = torch.empty_like(t32).uniform_(-hw, hw, generator=g)
             y = (t32 + noise).to(store_dtype)
         else:
             raise ValueError(f"unknown mode {mode!r}")

@@ -444,3 +444,61 @@ class TestCheckpointGuards(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             A._assert_fully_loaded("r", {"missing_keys": [f"k{i}" for i in range(40)]})
         self.assertIn("+32 more", str(ctx.exception))
+
+
+class TestGeneratorDevice(unittest.TestCase):
+    """Sampling must not assume the logits and the RNG share a device.
+
+    Hit on the first real GPU run: fox_generate built its generator on CPU
+    while the logits were on CUDA, and torch.multinomial raised "Expected a
+    'cuda' device type for generator but found 'cpu'". With
+    device_map="auto" the head can also land on a different shard from the
+    inputs, so the device is not something the sampler should have to know.
+    """
+
+    def test_token_comes_back_on_the_logits_device(self) -> None:
+        logits = torch.randn(64)
+        gen = torch.Generator().manual_seed(0)
+        tok = A._sample_from(
+            logits, top_p=0.9, temperature=1.0, greedy=False, generator=gen
+        )
+        self.assertEqual(tok.device, logits.device)
+
+    def test_seeded_sampling_is_reproducible(self) -> None:
+        logits = torch.randn(256, generator=torch.Generator().manual_seed(7))
+        a = A._sample_from(
+            logits, top_p=0.9, temperature=1.0, greedy=False,
+            generator=torch.Generator().manual_seed(11),
+        )
+        b = A._sample_from(
+            logits, top_p=0.9, temperature=1.0, greedy=False,
+            generator=torch.Generator().manual_seed(11),
+        )
+        self.assertEqual(int(a), int(b))
+
+    def test_greedy_needs_no_generator(self) -> None:
+        logits = torch.zeros(32)
+        logits[7] = 5.0
+        tok = A._sample_from(
+            logits, top_p=0.9, temperature=1.0, greedy=True, generator=None
+        )
+        self.assertEqual(int(tok), 7)
+
+    def test_top_p_keeps_at_least_one_candidate(self) -> None:
+        """top_p=0 must not produce an empty support and a NaN division."""
+        logits = torch.randn(128, generator=torch.Generator().manual_seed(3))
+        tok = A._sample_from(
+            logits, top_p=0.0, temperature=1.0, greedy=False,
+            generator=torch.Generator().manual_seed(1),
+        )
+        self.assertEqual(int(tok), int(logits.argmax()))
+
+    @unittest.skipUnless(torch.cuda.is_available(), "needs CUDA")
+    def test_cross_device_generator_is_handled(self) -> None:
+        """The exact failure from the Kaggle run, where it can be reproduced."""
+        logits = torch.randn(64, device="cuda")
+        cpu_gen = torch.Generator().manual_seed(0)
+        tok = A._sample_from(
+            logits, top_p=0.9, temperature=1.0, greedy=False, generator=cpu_gen
+        )
+        self.assertEqual(tok.device.type, "cuda")

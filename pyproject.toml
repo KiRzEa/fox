@@ -20,7 +20,7 @@ dependencies = []
 [project.optional-dependencies]
 # CPU-side metrics only: evaluate / stats / chair / report run on a laptop
 # with no GPU and no torch.
-cpu = ["numpy>=1.24,<2"]
+cpu = ["numpy>=1.24"]
 
 [project.scripts]
 fox-generate = "foxrepro.bench.generate:_main"

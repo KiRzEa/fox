@@ -437,8 +437,28 @@ def fox_generate(
     eager_layers: Optional[frozenset] = None,
     seed: Optional[int] = None,
     collect_trace: bool = False,
+    single_branch: bool = False,
+    pixel_values_do: Optional[torch.Tensor] = None,
 ) -> Dict[str, Any]:
     """Generate with Fox: both branches batched, fused per token.
+
+    ``single_branch=True`` runs one branch with no fusion at all, sampling
+    straight from ``z_obs``. That is the plain-nucleus-sampling baseline, and
+    routing it through *this* function rather than ``model.generate()`` is
+    deliberate: it guarantees the baseline and every Fox arm share one sampling
+    implementation, so the only difference between them is the intervention.
+    Unfair baselines are the most common silent error in this literature, and
+    two different top-p implementations would be exactly that.
+
+    Note that ``single_branch=True`` is NOT the same as ``mode="off"``. The
+    latter keeps the dual pass and the fusion while disabling the intervention,
+    which is the control that isolates the additive fusion ``z_obs + alpha *
+    z_do`` -- and which the paper never ran. Both are needed and they answer
+    different questions.
+
+    ``pixel_values_do`` supplies a different image to the interventional row,
+    which is how VCD works: its second branch sees a diffusion-noised image.
+    Leave it ``None`` for Fox, where both rows see the same image.
 
     ``generate()`` cannot express this -- it would sample the two rows
     independently rather than fusing their logits -- so the loop is explicit.
@@ -474,16 +494,23 @@ def fox_generate(
     # Row 0 observational, row 1 interventional: identical token sequences, so
     # batching them is exact, and decode reads the weights once instead of
     # twice. The released code runs two sequential passes.
-    ids2 = input_ids.repeat(2, 1)
-    mask2 = attn_mask.repeat(2, 1)
-    px2 = pixel_values.repeat(2, *([1] * (pixel_values.dim() - 1)))
+    n_rows = 1 if single_branch else 2
+    ids2 = input_ids.repeat(n_rows, 1)
+    mask2 = attn_mask.repeat(n_rows, 1)
+    if single_branch:
+        px2 = pixel_values
+    elif pixel_values_do is not None:
+        # VCD: row 0 sees the clean image, row 1 the corrupted one.
+        px2 = torch.cat([pixel_values, pixel_values_do.to(device)], dim=0)
+    else:
+        px2 = pixel_values.repeat(2, *([1] * (pixel_values.dim() - 1)))
 
     out_ids: List[int] = []
     trace: List[Dict[str, float]] = []
     cache = None
 
     with FOX.configured(
-        enabled=True, mode=mode, gamma=gamma, ratio=ratio,
+        enabled=not single_branch, mode=mode, gamma=gamma, ratio=ratio,
         logit_dtype=logit_dtype, softmax_dtype=softmax_dtype,
         img_start=img_start, img_end=img_end,
         branch_rows=torch.tensor([1], device=device),
@@ -504,19 +531,27 @@ def fox_generate(
                 )
             cache = out.past_key_values
             z_obs = out.logits[0, -1].float().unsqueeze(0)
-            z_do = out.logits[1, -1].float().unsqueeze(0)
 
-            if mode == "off":
-                # Fusion still runs: this arm isolates the additive logit
-                # fusion from the intervention, which the paper never did.
+            if single_branch:
+                # No second branch, no fusion: this IS the baseline. Sampling
+                # goes through the same _sample_from as every Fox arm.
                 d_t = torch.zeros(1, device=z_obs.device, dtype=torch.float64)
+                lam = torch.zeros(1, device=z_obs.device)
+                fused = masked = z_obs
+                decision = z_obs
             else:
-                d_t = jsd(z_obs, z_do)
-
-            fused, masked, lam = fuse(
-                z_obs, z_do, d_t, alpha=alpha, tau_js=tau_js, beta=beta
-            )
-            decision = fused if (greedy and not mask_greedy) else masked
+                z_do = out.logits[1, -1].float().unsqueeze(0)
+                if mode == "off":
+                    # The fusion still runs. This arm isolates the additive
+                    # logit fusion from the intervention -- the control the
+                    # paper never ran.
+                    d_t = torch.zeros(1, device=z_obs.device, dtype=torch.float64)
+                else:
+                    d_t = jsd(z_obs, z_do)
+                fused, masked, lam = fuse(
+                    z_obs, z_do, d_t, alpha=alpha, tau_js=tau_js, beta=beta
+                )
+                decision = fused if (greedy and not mask_greedy) else masked
             nxt = _sample_from(
                 decision[0], top_p=top_p, temperature=temperature,
                 greedy=greedy, generator=gen,
@@ -533,9 +568,9 @@ def fox_generate(
             if tok == model.config.text_config.eos_token_id:
                 break
 
-            nxt2 = nxt.view(1, 1).repeat(2, 1).to(device)
+            nxt2 = nxt.view(1, 1).repeat(n_rows, 1).to(device)
             ids2 = torch.cat([ids2, nxt2], dim=1)
-            mask2 = torch.cat([mask2, mask2.new_ones(2, 1)], dim=1)
+            mask2 = torch.cat([mask2, mask2.new_ones(n_rows, 1)], dim=1)
 
     result: Dict[str, Any] = {
         "token_ids": out_ids,

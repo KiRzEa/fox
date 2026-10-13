@@ -91,6 +91,16 @@ arithmetic on tensors. So:
 Once that passes, every other experiment arm is a deliberate deviation measured
 against a trusted baseline.
 
+## Three configurations people conflate
+
+| invocation | branches | fusion | intervention | what it is |
+|---|---|---|---|---|
+| `--method sampling` | 1 | no | no | the baseline every table is measured against |
+| `--method fox --mode off` | 2 | **yes** | no | isolates the additive fusion `z_obs + 2·z_do`, whose ~3× scale sharpens sampling on its own. **The control the paper never ran** |
+| `--method fox --mode as_implemented` | 2 | yes | yes | bit-equal to the released code |
+
+All of them share one sampling implementation (`fox.attention.fox_generate`), so the only difference between the baseline and any arm is the intervention. Two different top-p implementations would be an unfair baseline, which is the commonest silent error in this literature.
+
 ## The five arms
 
 `--mode` selects one. They are flags, not code paths, so a run file's
@@ -239,9 +249,10 @@ that failure is detectable after the fact.
 | `fox/reference.py` + `fox/kernel.py`, bit-equivalence proven | done |
 | POPE annotations (3000 × 3 splits, 500 images, 50/50 balanced) | shipped in `assets/` |
 | Kaggle bootstrap, host probe, notebook cells | done; host measured (2x T4, py3.13, torch 2.11, transformers 5.16.1) |
-| Total | **191 tests**, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
+| Total | **213 tests**, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
 | `fox/attention.py` — `AttentionInterface` wiring + dual-branch decode loop | done, 18 tests |
-| 5 method implementations (`sampling`, `fox`, `vcd`, `sid`, `opera`) | **next** — now pure wiring onto `fox.attention.fox_generate` |
+| `sampling`, `fox`, `vcd` | done, 21 tests against a fake model |
+| `sid` | needs the upstream SID repo; the Fox release ships only a FastV skeleton |
+| `opera` | beam search with rollback; its reference is its own transformers fork |
 | CHAIR synonym list | transcribed, **diff against Rohrbach's upstream before quoting CHAIR numbers externally** |
-| SID baseline | needs the upstream SID repo; not portable from the Fox release |
 | Gradio comparison demo | after the methods |

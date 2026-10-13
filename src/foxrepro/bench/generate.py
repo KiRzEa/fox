@@ -378,26 +378,74 @@ def register_method(cls: Type[Method]) -> Type[Method]:
     return cls
 
 
+#: Methods whose implementations live in ``bench/methods.py`` and need torch.
+_GPU_METHODS = frozenset({"sampling", "fox", "vcd"})
+
+
+def _load_gpu_methods() -> None:
+    """Import ``bench.methods`` on demand, registering the real implementations.
+
+    Deliberately lazy. ``bench/generate.py`` imports no torch at module scope,
+    so ``--dry-run`` (which uses the CPU ``echo`` double) and the whole
+    evaluate/report path keep working on a laptop with neither torch nor a GPU.
+    """
+    if _GPU_METHODS <= set(_REGISTRY):
+        return
+    try:
+        from foxrepro.bench import methods as _m  # noqa: PLC0415
+    except ImportError as exc:
+        raise ImportError(
+            f"the real method implementations need torch and transformers "
+            f"({exc}). Install requirements-trackB.lock, or use --dry-run, "
+            f"which runs the CPU 'echo' double instead."
+        ) from exc
+
+    # Merge explicitly rather than trusting the decorator to have written into
+    # *this* module's registry. Under `python -m foxrepro.bench.generate` this
+    # module is in sys.modules as "__main__", so methods.py's
+    # `from foxrepro.bench.generate import register_method` imports a SECOND
+    # copy with its own _REGISTRY, and the decorator populates that one. The
+    # console scripts and ordinary imports do not hit this, which is exactly
+    # what makes it the kind of bug that only shows up in one invocation path.
+    # Duck-typed on purpose: under the "__main__" double-import the `Method` in
+    # this namespace is a DIFFERENT class object from the one methods.py
+    # subclassed, so issubclass() would return False for every real
+    # implementation. Structural checks are the only thing that survives it.
+    for obj in vars(_m).values():
+        if (
+            isinstance(obj, type)
+            and isinstance(getattr(obj, "name", None), str)
+            and obj.name not in ("abstract", "abstract-llava")
+            and callable(getattr(obj, "load", None))
+            and callable(getattr(obj, "generate", None))
+            and obj.name not in _REGISTRY
+        ):
+            _REGISTRY[obj.name] = obj
+
+
 def get_method(name: str) -> Type[Method]:
     """Look up a registered method class.
 
     Raises:
         KeyError: with the list of known names, which is the error a typo in
             ``--method`` should produce.
+        ImportError: if a GPU method is requested without torch installed.
     """
+    if name in _GPU_METHODS:
+        _load_gpu_methods()
     try:
         return _REGISTRY[name]
     except KeyError:
-        raise KeyError(f"unknown method {name!r}; known: {sorted(_REGISTRY)}") from None
+        raise KeyError(f"unknown method {name!r}; known: {sorted(list_methods())}") from None
 
 
 def list_methods() -> List[str]:
     """Names of all registered methods."""
-    return sorted(_REGISTRY)
+    return sorted(set(_REGISTRY) | _GPU_METHODS)
 
 
 # --------------------------------------------------------------------------- #
-# method stubs -- THE FRAMEWORK / METHOD AGENT FILLS THESE IN
+# remaining stubs: sid and opera. sampling/fox/vcd are real, in bench/methods.py
 # --------------------------------------------------------------------------- #
 class _NotImplementedMethod(Method):
     """Shared body for the not-yet-implemented methods."""
@@ -420,36 +468,6 @@ class _NotImplementedMethod(Method):
 
 
 @register_method
-class SamplingMethod(_NotImplementedMethod):
-    """Reference baseline: plain nucleus sampling, no intervention.
-
-    This is the method every other number is compared against, so it is the
-    one to implement first: ``top_p = 0.9``, ``T = 1.0``, no repetition or
-    length penalty, ``max_new_tokens`` 1 for POPE / 512 for CHAIR, single
-    forward pass per token.
-    """
-
-    name = "sampling"
-    todo = (
-        "single-branch nucleus sampling on LLaVA-1.5-7B; honour cfg.decoding "
-        "('greedy' => do_sample=False, for the Table 9 control), cfg.top_p, "
-        "cfg.temperature and cfg.seed (seed the generator per sample so a "
-        "resumed run reproduces the same tokens for the samples it redoes)."
-    )
-
-
-@register_method
-class VCDMethod(_NotImplementedMethod):
-    """VCD (Leng et al., 2024): contrastive decoding against a noised image."""
-
-    name = "vcd"
-    todo = (
-        "two forward branches per token: clean image and diffusion-noised "
-        "image; contrast the logits with the published alpha/beta cutoff."
-    )
-
-
-@register_method
 class SIDMethod(_NotImplementedMethod):
     """SID (Huo et al., 2025): self-contrastive token reweighting."""
 
@@ -469,27 +487,6 @@ class OPERAMethod(_NotImplementedMethod):
 
     name = "opera"
     todo = "beam search (num_beams=5) with the attention over-trust penalty and rollback."
-
-
-@register_method
-class FoxMethod(_NotImplementedMethod):
-    """Fox (the paper under reproduction): conflict-gated causal intervention.
-
-    Per Algorithm 1: pass 1 gives ``z_obs``; pass 2 re-runs with a negative
-    bias ``-gamma`` applied pre-softmax to the top ``ceil(k * n_heads)`` risky
-    attention heads per intervened layer; the branches are fused as
-    ``z_final = z_obs + lambda * z_do`` with ``lambda = alpha`` when the
-    truncated JSD ``d < tau_js`` and ``lambda = d`` otherwise, where the JSD is
-    computed over ``{y : P_obs(y) >= beta * max P_obs}``.
-    """
-
-    name = "fox"
-    todo = (
-        "implement Algorithm 1. gamma is NOT given in the paper ('a large "
-        "intervention constant'), and its effect depends on the numerical "
-        "precision of the attention logits -- which is precisely why gamma and "
-        "dtype are swept here and are mandatory provenance fields."
-    )
 
 
 @register_method

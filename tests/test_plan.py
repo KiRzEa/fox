@@ -160,3 +160,239 @@ class TestProgressTracking(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSessionPartition(unittest.TestCase):
+    """Disjointness first: two sessions running the same job burns a T4 twice."""
+
+    def test_partition_is_disjoint_and_complete(self) -> None:
+        from foxrepro.bench.plan import partition_jobs
+
+        for n in (1, 2, 3, 5, 8):
+            with self.subTest(n_sessions=n):
+                groups = partition_jobs(n)
+                ids = [j.job_id() for g in groups for j in g]
+                self.assertEqual(len(ids), len(PLAN), "jobs lost or duplicated")
+                self.assertEqual(len(set(ids)), len(PLAN), "a job is in two sessions")
+
+    def test_partition_is_cost_balanced(self) -> None:
+        """Round-robin over costs ranging 0.2-2.3 h leaves one session double."""
+        from foxrepro.bench.plan import partition_jobs
+
+        loads = [
+            sum(j.est_seconds() for j in g) / 3600 for g in partition_jobs(5)
+        ]
+        self.assertLess(max(loads) - min(loads), 0.1 * max(loads))
+
+    def test_cheap_jobs_run_first_within_a_session(self) -> None:
+        """A session cut early then leaves more completed jobs behind."""
+        from foxrepro.bench.plan import partition_jobs
+
+        for group in partition_jobs(5):
+            costs = [j.est_seconds() for j in group]
+            self.assertEqual(costs, sorted(costs))
+
+    def test_rejects_a_bad_session_count(self) -> None:
+        from foxrepro.bench.plan import partition_jobs
+
+        with self.assertRaises(ValueError):
+            partition_jobs(0)
+
+    def test_job_ids_are_unique(self) -> None:
+        """The frozen plan and the calibration TSV are both keyed on them."""
+        ids = [j.job_id() for j in PLAN]
+        self.assertEqual(len(set(ids)), len(ids))
+
+
+class TestFrozenPlan(unittest.TestCase):
+    """The split is written to a file so sessions agree after a plan edit."""
+
+    def setUp(self) -> None:
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.tmp = Path(td.name)
+
+    def test_freeze_writes_every_job_once(self) -> None:
+        from foxrepro.bench.plan import freeze_plan
+
+        out = self.tmp / "run_plan.json"
+        payload = freeze_plan(4, 10.5, out)
+        self.assertTrue(out.is_file())
+        assigned = [j for s in payload["sessions"] for j in s["jobs"]]
+        self.assertEqual(len(assigned), len(PLAN))
+        self.assertEqual(len(set(assigned)), len(PLAN))
+        self.assertEqual(set(assigned), set(payload["jobs"]))
+
+    def test_frozen_commands_match_the_live_plan(self) -> None:
+        from foxrepro.bench.plan import freeze_plan
+
+        payload = freeze_plan(3, 10.5, self.tmp / "p.json")
+        live = {j.job_id(): j.command() for j in PLAN}
+        for jid, rec in payload["jobs"].items():
+            self.assertEqual(rec["command"], live[jid])
+
+    def test_calibration_replaces_estimates(self) -> None:
+        from foxrepro.bench.plan import freeze_plan
+
+        jid = PLAN[0].job_id()
+        tsv = self.tmp / "_job_times.tsv"
+        tsv.write_text(f"{jid}\t42.0\t0\nnot-a-job\tbroken\n")
+        payload = freeze_plan(2, 10.5, self.tmp / "p.json", calibrate=tsv)
+        self.assertEqual(payload["n_calibrated"], 1)
+        self.assertEqual(payload["jobs"][jid]["est_s"], 42.0 * 60)
+        self.assertTrue(payload["jobs"][jid]["measured"])
+
+    def test_run_file_names_in_the_plan_match_the_cli(self) -> None:
+        """If these drift, a session re-runs work another already finished."""
+        from foxrepro.bench.plan import freeze_plan
+
+        payload = freeze_plan(2, 10.5, self.tmp / "p.json")
+        for jid, rec in payload["jobs"].items():
+            cmd = rec["command"]
+            self.assertEqual(
+                cfg_from_command(cmd).run_key().filename(), rec["run_file"]
+            )
+
+    def test_dry_run_prints_without_executing(self) -> None:
+        import io
+        from contextlib import redirect_stdout
+
+        from foxrepro.bench.plan import freeze_plan, run_session
+
+        out = self.tmp / "p.json"
+        freeze_plan(2, 10.5, out)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = run_session(1, out, dry_run=True)
+        self.assertEqual(rc, 0)
+        self.assertIn("foxrepro.bench.generate", buf.getvalue())
+
+    def test_unknown_session_is_an_error_not_a_silent_no_op(self) -> None:
+        from foxrepro.bench.plan import freeze_plan, run_session
+
+        out = self.tmp / "p.json"
+        freeze_plan(2, 10.5, out)
+        self.assertEqual(run_session(9, out, dry_run=True), 2)
+
+
+class TestIngest(unittest.TestCase):
+    """Each session writes to its own /kaggle/working; the files must merge."""
+
+    def setUp(self) -> None:
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.tmp = Path(td.name)
+
+    def _write(self, d: Path, name: str, ids) -> None:
+        import json as _json
+
+        d.mkdir(parents=True, exist_ok=True)
+        with (d / name).open("w") as fh:
+            for sid in ids:
+                fh.write(_json.dumps({"sample_id": sid, "output": "Yes"}) + "\n")
+
+    def test_distinct_files_are_copied(self) -> None:
+        from foxrepro.bench.plan import ingest_runs
+
+        s1, s2, dest = self.tmp / "s1", self.tmp / "s2", self.tmp / "dest"
+        self._write(s1, "a.jsonl", ["x1", "x2"])
+        self._write(s2, "b.jsonl", ["y1"])
+        rep = ingest_runs([s1, s2], dest)
+        self.assertEqual(rep["copied"], 2)
+        self.assertTrue((dest / "a.jsonl").is_file())
+        self.assertTrue((dest / "b.jsonl").is_file())
+
+    def test_partial_files_for_the_same_job_merge_by_union(self) -> None:
+        """A plan edit can move a job between sessions; both halves are real."""
+        from foxrepro.bench.plan import ingest_runs
+
+        s1, s2, dest = self.tmp / "s1", self.tmp / "s2", self.tmp / "dest"
+        self._write(s1, "same.jsonl", ["x1", "x2"])
+        self._write(s2, "same.jsonl", ["x2", "x3"])
+        ingest_runs([s1], dest)
+        rep = ingest_runs([s2], dest)
+        self.assertEqual(rep["merged"], 1)
+        text = (dest / "same.jsonl").read_text()
+        for sid in ("x1", "x2", "x3"):
+            self.assertIn(sid, text)
+        self.assertEqual(text.count('"x2"'), 1, "duplicate record")
+
+    def test_nothing_new_is_skipped_not_duplicated(self) -> None:
+        from foxrepro.bench.plan import ingest_runs
+
+        s1, dest = self.tmp / "s1", self.tmp / "dest"
+        self._write(s1, "same.jsonl", ["x1"])
+        ingest_runs([s1], dest)
+        rep = ingest_runs([s1], dest)
+        self.assertEqual(rep["skipped"], 1)
+        self.assertEqual(rep["merged"], 0)
+
+    def test_dry_run_changes_nothing(self) -> None:
+        from foxrepro.bench.plan import ingest_runs
+
+        s1, dest = self.tmp / "s1", self.tmp / "dest"
+        self._write(s1, "a.jsonl", ["x1"])
+        ingest_runs([s1], dest, dry_run=True)
+        self.assertFalse((dest / "a.jsonl").exists())
+
+
+class TestProgressActuallyCounts(unittest.TestCase):
+    """Progress must be read from the file, not silently reported as zero.
+
+    scan_progress once wrapped the scan in a broad `except Exception: done = 0`
+    while calling a field that did not exist. Every job therefore reported no
+    progress, the plan re-emitted finished work forever, and the round-trip
+    test above still passed because it only checked filenames. So the count
+    itself is now asserted against a file written with real provenance.
+    """
+
+    def setUp(self) -> None:
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.runs = Path(td.name)
+
+    def _fill(self, job, n: int) -> None:
+        import json as _json
+
+        prov = cfg_from_command(job.command()).provenance()
+        with (self.runs / job.run_key().filename()).open("w") as fh:
+            for i in range(n):
+                rec = dict(prov)
+                rec.update(
+                    sample_id=f"{job.benchmark}/{job.split}/q{i:07d}",
+                    image_id=i, prompt="p", output="Yes", latency_ms=1.0,
+                    n_prompt_tokens=600, n_gen_tokens=1,
+                    timestamp="2026-01-01T00:00:00Z", commit_hash="x",
+                    transformers_path="y", label="yes",
+                )
+                fh.write(_json.dumps(rec) + "\n")
+
+    def test_partial_progress_is_counted(self) -> None:
+        job = PLAN[0]
+        self._fill(job, 7)
+        row = scan_progress([job], self.runs)["rows"][0]
+        self.assertEqual(row["done"], 7)
+        self.assertFalse(row["complete"])
+
+    def test_a_full_file_marks_the_job_complete(self) -> None:
+        job = next(j for j in PLAN if j.n_samples == 500)
+        self._fill(job, job.n_samples)
+        row = scan_progress([job], self.runs)["rows"][0]
+        self.assertTrue(row["complete"])
+        self.assertEqual(row["remaining_s"], 0)
+
+    def test_a_completed_job_is_not_re_emitted(self) -> None:
+        from foxrepro.bench.plan import next_jobs
+
+        job = next(j for j in PLAN if j.n_samples == 500)
+        self._fill(job, job.n_samples)
+        emitted = [j["command"] for j in next_jobs(50.0, [job], self.runs)]
+        self.assertEqual(emitted, [])
+
+    def test_measured_cost_reads_real_latencies(self) -> None:
+        from foxrepro.bench.plan import measured_cost
+
+        self._fill(PLAN[0], 5)
+        cost = measured_cost(self.runs)
+        self.assertIn("pope/single", cost)
+        self.assertAlmostEqual(cost["pope/single"], 0.001, places=3)

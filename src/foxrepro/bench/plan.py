@@ -75,7 +75,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import shlex
+import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -84,6 +85,7 @@ from foxrepro.storage import BENCHMARK_SPLITS, RunKey, paths
 
 __all__ = [
     "Job", "PLAN", "measured_cost", "scan_progress", "next_jobs", "render_plan",
+    "partition_jobs", "render_session", "ingest_runs",
 ]
 
 #: Seconds per sample, measured on 2x T4 with LLaVA-1.5-7B fp16 sharded.
@@ -128,6 +130,27 @@ class Job:
     seed: int = 42
     limit: Optional[int] = None
     note: str = ""
+
+    def job_id(self) -> str:
+        """Stable, readable identifier used in the frozen plan and the
+        calibration TSV. Derived from the fields that distinguish jobs, so it
+        survives plan edits as long as the job itself is unchanged."""
+        bits = [self.target, self.method, self.benchmark, self.split]
+        if self.decoding != "sampling":
+            bits.append(self.decoding)
+        if self.method == "fox" and self.mode != "as_implemented":
+            bits.append(self.mode)
+        if self.logit_dtype != "native":
+            bits.append(f"ld{self.logit_dtype}")
+        if self.system_prompt_id != "llava_v1":
+            bits.append(f"sp{self.system_prompt_id}")
+        for nm, v in (("g", self.gamma), ("k", self.k),
+                      ("t", self.tau_js), ("a", self.alpha)):
+            if v is not None:
+                bits.append(f"{nm}{v:g}")
+        if self.limit:
+            bits.append(f"n{self.limit}")
+        return ":".join(bits)
 
     @property
     def n_samples(self) -> int:
@@ -266,6 +289,113 @@ def _build_plan() -> List[Job]:
 PLAN: List[Job] = _build_plan()
 
 
+
+# --------------------------------------------------------------------------- #
+# sharding across independent sessions
+# --------------------------------------------------------------------------- #
+def partition_jobs(n_sessions: int, jobs: Iterable[Job] = ()) -> List[List[Job]]:
+    """Split the plan into ``n_sessions`` cost-balanced, disjoint groups.
+
+    Longest-processing-time-first: sort by estimated cost descending and give
+    each job to whichever session is currently lightest. That is the standard
+    greedy makespan heuristic and it matters here because a naive round-robin
+    over 53 jobs whose costs range from 0.2 h to 2.3 h can leave one session
+    with twice the work of another.
+
+    **Reassignment is safe.** Editing the plan can move a job between
+    sessions, but every job resumes from its own run file, whose name is
+    derived from the configuration and not from the session. So a job half-done
+    by session 2 and later reassigned to session 3 is continued by session 3
+    rather than restarted, and nothing is lost or duplicated. This is why
+    balance was preferred over a stable hash-based assignment.
+    """
+    if n_sessions < 1:
+        raise ValueError("n_sessions must be >= 1")
+    jobs = list(jobs) or PLAN
+    buckets: List[List[Job]] = [[] for _ in range(n_sessions)]
+    loads = [0.0] * n_sessions
+    for job in sorted(jobs, key=lambda j: -j.est_seconds()):
+        i = min(range(n_sessions), key=lambda x: loads[x])
+        buckets[i].append(job)
+        loads[i] += job.est_seconds()
+    # Within a session, run the cheap jobs first: a session that dies early
+    # then leaves more completed jobs behind than one that began with a 2.3 h
+    # job and got cut at 90%.
+    return [sorted(b, key=lambda j: j.est_seconds()) for b in buckets]
+
+
+def ingest_runs(
+    sources: Sequence[Path], dest: Optional[Path] = None, dry_run: bool = False
+) -> Dict[str, object]:
+    """Merge run files produced by independent sessions into one directory.
+
+    Each session writes to its own ``/kaggle/working``, so the files have to be
+    collected before ``evaluate``/``report`` can see them all. Filenames encode
+    the full configuration, so files from different sessions never collide by
+    accident -- but a plan edit can move a job between sessions, and then two
+    sessions may hold partial files for the SAME job. Those are merged by
+    sample_id union rather than one overwriting the other, since both halves
+    are real work.
+    """
+    from foxrepro.bench.generate import scan_run_file
+
+    def _records(path: Path) -> List[Dict[str, object]]:
+        out: List[Dict[str, object]] = []
+        with path.open() as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    # A trailing partial line from a hard kill; scan_run_file
+                    # repairs those in place, so skipping here is safe.
+                    continue
+        return out
+
+    dest = dest or paths().runs_root
+    dest.mkdir(parents=True, exist_ok=True)
+    report: Dict[str, object] = {
+        "dest": str(dest), "copied": 0, "merged": 0, "skipped": 0, "files": []
+    }
+    for src_dir in sources:
+        for src in sorted(Path(src_dir).glob("*.jsonl")):
+            target = dest / src.name
+            if not target.exists():
+                if not dry_run:
+                    target.write_bytes(src.read_bytes())
+                report["copied"] = int(report["copied"]) + 1  # type: ignore[arg-type]
+                report["files"].append(f"copied {src.name}")  # type: ignore[union-attr]
+                continue
+            scan_run_file(target, repair=True)   # repair a partial tail first
+            have = {r.get("sample_id") for r in _records(target)}
+            incoming = [
+                r for r in _records(src) if r.get("sample_id") not in have
+            ]
+            if not incoming:
+                report["skipped"] = int(report["skipped"]) + 1  # type: ignore[arg-type]
+                continue
+            if not dry_run:
+                # Append raw lines rather than going through JsonlWriter.
+                # These records were validated when generate.py wrote them;
+                # re-validating here would refuse files produced by a session
+                # running an older schema, which is precisely the case this
+                # function exists to handle.
+                import os as _os
+
+                with target.open("a") as fh:
+                    for rec in incoming:
+                        fh.write(json.dumps(rec, sort_keys=True) + "\n")
+                    fh.flush()
+                    _os.fsync(fh.fileno())
+            report["merged"] = int(report["merged"]) + 1  # type: ignore[arg-type]
+            report["files"].append(  # type: ignore[union-attr]
+                f"merged {len(incoming)} records into {src.name}"
+            )
+    return report
+
+
 def measured_cost(runs_root: Optional[Path] = None) -> Dict[str, float]:
     """Re-derive seconds-per-sample from the run files that exist.
 
@@ -323,8 +453,13 @@ def scan_progress(
         done = 0
         if path.is_file():
             try:
-                done = len(scan_run_file(path, key=key).sample_ids)
-            except Exception:  # noqa: BLE001 - a corrupt file is "not done"
+                done = len(scan_run_file(path, key=key).done_ids)
+            except (OSError, ValueError, json.JSONDecodeError):
+                # A corrupt or mismatched file counts as no progress. Caught
+                # narrowly on purpose: a broad `except Exception` here once hid
+                # an AttributeError and made every job report 0 done, which is
+                # the exact "plan loses track of itself" failure this module
+                # is supposed to prevent.
                 done = 0
         total = job.n_samples
         rows.append({
@@ -426,21 +561,275 @@ def render_plan(budget_hours: float = 9.0, runs_root: Optional[Path] = None) -> 
     return "\n".join(lines)
 
 
-def _main(argv: Optional[Sequence[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--budget-hours", type=float, default=9.0,
-                    help="Kaggle caps a session at 12 h; 9 leaves headroom")
-    ap.add_argument("--runs-dir", type=Path, default=None)
-    ap.add_argument("--json", action="store_true")
-    ap.add_argument("--calibrate", action="store_true",
-                    help="report measured seconds-per-sample and stop")
-    args = ap.parse_args(argv)
+def freeze_plan(
+    n_sessions: int, budget_hours: float, plan_path: Path,
+    calibrate: Optional[Path] = None, round_tag: str = "r1",
+) -> Dict[str, object]:
+    """Partition the plan and write it to disk.
 
-    if args.calibrate:
+    The partition is **frozen to a file** rather than recomputed per session.
+    That is the difference between sessions that agree on who does what and
+    sessions that silently overlap or skip work after the plan source is
+    edited. Run this once, locally, commit the file, and every session reads
+    the same assignment.
+
+    ``calibrate`` is a TSV of ``job_id<TAB>minutes<TAB>returncode`` appended by
+    :func:`run_session`. Feeding it back replaces the estimates, which are
+    scaled from a single measurement and will drift.
+    """
+    measured: Dict[str, float] = {}
+    if calibrate and Path(calibrate).is_file():
+        for line in Path(calibrate).read_text().splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                try:
+                    measured[parts[0]] = float(parts[1]) * 60.0
+                except ValueError:
+                    continue
+
+    jobs = PLAN
+    groups = partition_jobs(n_sessions, jobs)
+    payload: Dict[str, object] = {
+        "round": round_tag,
+        "n_sessions": n_sessions,
+        "budget_hours": budget_hours,
+        "n_calibrated": len(measured),
+        "jobs": {},
+        "sessions": [],
+    }
+    for gi, group in enumerate(groups, 1):
+        ids = []
+        for job in group:
+            jid = job.job_id()
+            est = measured.get(jid, job.est_seconds())
+            payload["jobs"][jid] = {  # type: ignore[index]
+                "id": jid, "target": job.target, "note": job.note,
+                "command": job.command(), "est_s": round(est, 1),
+                "run_file": job.run_key().filename(),
+                "n_samples": job.n_samples,
+                "measured": jid in measured,
+            }
+            ids.append(jid)
+        payload["sessions"].append({  # type: ignore[union-attr]
+            "session": gi, "jobs": ids,
+            "est_hours": round(
+                sum(float(payload["jobs"][i]["est_s"]) for i in ids) / 3600, 2  # type: ignore[index]
+            ),
+        })
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(json.dumps(payload, indent=2))
+    return payload
+
+
+def run_session(
+    session: int, plan_path: Path, *, budget_hours: Optional[float] = None,
+    dry_run: bool = False, runs_root: Optional[Path] = None,
+    pack: bool = True, hard_deadline_hours: float = 11.3,
+) -> int:
+    """Execute one session's jobs, in budget, resumably.
+
+    Four behaviours borrowed from the ACSA queue, each earned the hard way:
+
+    * **A job whose estimate no longer fits the remaining budget is skipped,
+      not started.** Beginning a 2.3 h job with 40 minutes left burns the GPU
+      for nothing, because the next session resumes it from the same place
+      either way.
+    * **Results are packed after every finished job**, so a cut session loses
+      at most the job in flight.
+    * **Per-job logs** go to a logs directory; the console keeps only the
+      timeline.
+    * **A watchdog stops cleanly before Kaggle's 12 h wall.** A notebook killed
+      by the platform may lose its output entirely, which would throw away
+      every completed job in the session.
+    """
+    import subprocess
+    import threading
+
+    p = paths()
+    plan = json.loads(Path(plan_path).read_text())
+    try:
+        ids = plan["sessions"][session - 1]["jobs"]
+    except (IndexError, KeyError):
+        print(f"[plan] session {session} is not in {plan_path}", file=sys.stderr)
+        return 2
+
+    tag = f"fox_{plan.get('round', 'r1')}_s{session}"
+    if dry_run:
+        for jid in ids:
+            j = plan["jobs"][jid]
+            print(f"# {jid}  est {j['est_s'] / 60:.0f} min"
+                  f"{'  (measured)' if j.get('measured') else ''}")
+            print(j["command"])
+        return 0
+
+    runs_root = runs_root or p.runs_root
+    logs = p.logs_dir
+    logs.mkdir(parents=True, exist_ok=True)
+    times = p.logs_dir / "_job_times.tsv"
+    budget = (budget_hours or plan.get("budget_hours", 10.5)) * 3600
+    t0 = time.time()
+    stop = threading.Event()
+    procs: set = set()
+
+    def watchdog() -> None:
+        hard = hard_deadline_hours * 3600
+        while not stop.wait(10):
+            if time.time() - t0 > hard:
+                print(f"[{time.strftime('%H:%M:%S')}] HARD DEADLINE "
+                      f"({hard_deadline_hours:.1f} h): stopping so the notebook "
+                      f"can finish and keep its output", flush=True)
+                stop.set()
+                for pr in list(procs):
+                    try:
+                        pr.terminate()
+                    except Exception:  # noqa: BLE001
+                        pass
+                return
+
+    threading.Thread(target=watchdog, daemon=True).start()
+    ran = skipped = failed = 0
+    try:
+        for jid in ids:
+            if stop.is_set():
+                print("[plan] deadline reached; remaining jobs left for the "
+                      "next session")
+                break
+            job = plan["jobs"][jid]
+            run_file = runs_root / job["run_file"]
+            if run_file.is_file():
+                from foxrepro.bench.generate import scan_run_file
+                try:
+                    done = len(scan_run_file(run_file).done_ids)
+                except Exception:  # noqa: BLE001
+                    done = 0
+                if done >= job["n_samples"] > 0:
+                    print(f"[{time.strftime('%H:%M:%S')}] SKIP {jid} (complete)")
+                    skipped += 1
+                    continue
+
+            left = budget - (time.time() - t0)
+            if job["est_s"] > left:
+                print(f"[{time.strftime('%H:%M:%S')}] DEFER {jid} "
+                      f"(needs {job['est_s'] / 60:.0f} min, "
+                      f"{left / 60:.0f} min left in budget)")
+                skipped += 1
+                continue
+
+            print(f"[{time.strftime('%H:%M:%S')}] START {jid} "
+                  f"(~{job['est_s'] / 60:.0f} min)", flush=True)
+            start = time.time()
+            log_path = logs / (jid.replace("/", "_").replace(":", "_") + ".log")
+            with log_path.open("w") as log:
+                pr = subprocess.Popen(
+                    job["command"], shell=True, cwd=str(p.repo_root),
+                    stdout=log, stderr=subprocess.STDOUT,
+                )
+                procs.add(pr)
+                rc = pr.wait()
+                procs.discard(pr)
+            minutes = (time.time() - start) / 60
+            with times.open("a") as fh:
+                fh.write(f"{jid}\t{minutes:.1f}\t{rc}\n")
+            if rc == 0:
+                print(f"[{time.strftime('%H:%M:%S')}] DONE  {jid} "
+                      f"({minutes:.1f} min)", flush=True)
+                ran += 1
+            else:
+                # Exit code 7 is generate.py's "stopped early, resume me".
+                kind = "STOPPED" if rc == 7 else "FAIL"
+                print(f"[{time.strftime('%H:%M:%S')}] {kind} {jid} "
+                      f"(rc={rc}, {minutes:.1f} min) -- tail of {log_path}:",
+                      flush=True)
+                tail = log_path.read_text().splitlines()[-8:]
+                print("\n".join("    " + x for x in tail), flush=True)
+                failed += 0 if rc == 7 else 1
+            if pack:
+                subprocess.run(["bash", "scripts/pack_runs.sh", tag],
+                               cwd=str(p.repo_root),
+                               stdout=subprocess.DEVNULL)
+    finally:
+        stop.set()
+
+    print(f"\n[plan] session {session}: {ran} ran, {skipped} skipped/deferred, "
+          f"{failed} failed, {(time.time() - t0) / 3600:.2f} h elapsed")
+    print(f"[plan] pack tag: {tag}")
+    return 1 if failed else 0
+
+
+def _main(argv: Optional[Sequence[str]] = None) -> int:
+    p = paths()
+    default_plan = p.repo_root / "scripts" / "run_plan.json"
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    sub = ap.add_subparsers(dest="cmd")
+
+    a = sub.add_parser("list", help="inventory: done / remaining per target")
+    a.add_argument("--runs-dir", type=Path, default=None)
+    a.add_argument("--budget-hours", type=float, default=9.0)
+    a.add_argument("--json", action="store_true")
+
+    a = sub.add_parser("plan", help="freeze the session split to a JSON file")
+    a.add_argument("--sessions", type=int, required=True)
+    a.add_argument("--budget-hours", type=float, default=10.5,
+                   help="per session; Kaggle caps a session at 12 h")
+    a.add_argument("--calibrate", type=Path, default=None,
+                   help="a _job_times.tsv written by `run`, to replace estimates")
+    a.add_argument("--round", default="r1", help="tag for the pack filenames")
+    a.add_argument("--out", type=Path, default=default_plan)
+
+    a = sub.add_parser("run", help="execute one session (on Kaggle)")
+    a.add_argument("--session", type=int, required=True)
+    a.add_argument("--plan", type=Path, default=default_plan)
+    a.add_argument("--budget-hours", type=float, default=None)
+    a.add_argument("--dry-run", action="store_true")
+    a.add_argument("--no-pack", action="store_true")
+    a.add_argument("--runs-dir", type=Path, default=None)
+    a.add_argument("--tag", action="store_true",
+                   help="print the pack tag for this session and exit")
+
+    a = sub.add_parser("ingest", help="merge run files from several sessions")
+    a.add_argument("dirs", type=Path, nargs="+")
+    a.add_argument("--runs-dir", type=Path, default=None)
+    a.add_argument("--dry-run", action="store_true")
+
+    a = sub.add_parser("calibrate", help="measured seconds per sample")
+    a.add_argument("--runs-dir", type=Path, default=None)
+
+    args = ap.parse_args(argv)
+    cmd = args.cmd or "list"
+
+    if cmd == "calibrate":
         print(json.dumps(measured_cost(args.runs_dir), indent=2))
         return 0
-    if args.json:
+    if cmd == "ingest":
+        print(json.dumps(ingest_runs(args.dirs, args.runs_dir, args.dry_run),
+                         indent=2))
+        return 0
+    if cmd == "plan":
+        payload = freeze_plan(args.sessions, args.budget_hours, args.out,
+                              args.calibrate, args.round)
+        print(f"# Wrote {args.out}  (round {payload['round']}, "
+              f"{payload['n_calibrated']} calibrated estimates)\n")
+        print("| session | jobs | est GPU-h |")
+        print("|---|---|---|")
+        for sess in payload["sessions"]:  # type: ignore[union-attr]
+            print(f"| {sess['session']} | {len(sess['jobs'])} | "
+                  f"{sess['est_hours']} |")
+        print(f"\nOn Kaggle:  bash run_kaggle_fox.sh <N>   "
+              f"(N = 1..{args.sessions})")
+        return 0
+    if cmd == "run":
+        if args.tag:
+            plan = json.loads(Path(args.plan).read_text())
+            print(f"fox_{plan.get('round', 'r1')}_s{args.session}")
+            return 0
+        return run_session(
+            args.session, args.plan, budget_hours=args.budget_hours,
+            dry_run=args.dry_run, runs_root=args.runs_dir,
+            pack=not args.no_pack,
+        )
+    if getattr(args, "json", False):
         print(json.dumps(scan_progress(runs_root=args.runs_dir), indent=2,
                          default=str))
         return 0

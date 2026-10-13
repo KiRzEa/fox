@@ -227,34 +227,79 @@ pipeline" to "one ~50-sample oracle run".
 
 ## Reproducing across sessions
 
-The paper prints 15 tables and 22 figures and this hardware cannot reach all
-of them; `foxrepro/bench/plan.py` records which, why, and what to run next.
+The paper prints 15 tables and 22 figures and this hardware cannot reach all of
+them; `foxrepro/bench/plan.py` records which, why, and what to run next. **53
+jobs, ~87 GPU-hours** — about three weeks of Kaggle's 30/week quota, or five
+concurrent sessions of ~17.4 h each.
+
+Freeze the split once, locally, and commit it:
 
 ```bash
-python -m foxrepro.bench.plan --budget-hours 9     # a session's worth
-python -m foxrepro.bench.plan --calibrate          # re-measure s/sample
+python -m foxrepro.bench.plan plan --sessions 5      # -> scripts/run_plan.json
 ```
 
-It predicts each job's run file, counts the records in it, and emits the next
-incomplete commands in priority order. Re-running an emitted command resumes,
-so a session dying mid-job costs only the in-flight sample. The round-trip
-job → command → run file is asserted for all 53 jobs, because if it drifted
-the plan would report zero progress forever and re-emit finished work.
+| session | jobs | est GPU-h |
+|---|---|---|
+| 1 | 10 | 17.6 |
+| 2 | 10 | 17.3 |
+| 3 | 11 | 17.4 |
+| 4 | 11 | 17.4 |
+| 5 | 11 | 17.6 |
 
-**53 jobs, ~87 GPU-hours** — about three weeks of Kaggle's 30/week quota.
-Priority order: Tables 1/8, 2 and 9 first (the LLaVA-1.5 column of every main
-table), then the mechanism audit, then the sensitivity sweeps.
+Then one flag per Kaggle session — they are disjoint, so they can run at the
+same time:
+
+```bash
+bash run_kaggle_fox.sh 3              # session 3
+DRY=1 bash run_kaggle_fox.sh 3        # print the commands only
+BUDGET=10.5 bash run_kaggle_fox.sh 3  # hours, default from the frozen plan
+```
+
+Finally, collect and aggregate:
+
+```bash
+python -m foxrepro.bench.plan ingest  unzipped_s1/ unzipped_s2/ ...
+python -m foxrepro.bench.evaluate --all
+python -m foxrepro.bench.report
+```
+
+Why it is shaped this way, mostly learned from the ACSA queue in a sibling
+project:
+
+- **The split is frozen to a file**, not recomputed per session. Otherwise
+  editing the plan source silently reassigns work and sessions overlap or skip.
+- **Jobs are cost-balanced** by longest-processing-time-first. Round-robin over
+  53 jobs costing 0.2–2.3 h leaves one session with twice the work.
+- **Reassignment is still safe.** Resume is keyed on the run file, which is
+  derived from the configuration and not the session, so a job half-done by
+  session 2 and later moved to session 3 is continued rather than restarted.
+- **Cheap jobs run first within a session**, so a session cut early leaves more
+  completed jobs behind.
+- **A job that no longer fits the remaining budget is deferred, not started** —
+  beginning a 2.3 h job with 40 minutes left burns the GPU for nothing.
+- **Results are packed after every finished job**, so a cut session loses at
+  most the job in flight.
+- **A watchdog stops cleanly at 11.3 h.** A notebook killed by Kaggle's 12 h
+  wall can lose its output entirely, discarding every completed job.
+- **`--calibrate` feeds measured times back.** `run` appends
+  `job_id<TAB>minutes<TAB>rc` to `_job_times.tsv`; passing it to `plan`
+  replaces the estimates, which are scaled from one measurement and will drift.
+
+`ingest` merges partial files for the same job by `sample_id` union rather than
+letting one overwrite the other, and appends raw lines rather than re-validating
+them — the files it collects may come from sessions running an older schema,
+which is exactly the case it exists to handle.
 
 **Out of reach here, stated rather than left as a hole:** the InstructBLIP
-column (it runs the repo's *second* intervention copy, which drops `m_sys`
-and uses layers 4–10 — a different method needing its own implementation);
-the Shikra column (no maintained HF conversion, and the released code finds
-its visual span by the magic numbers `img_s==33 and img_e==290`); MME
-(dataset absent, and the Fox release ships no MME script despite reporting
-MME results); the GPT-4V judge (paid API); MMBench and MathVista; and the
-ICD / SID / OPERA / CausalMM baselines, each of which needs its upstream
-repo. Roughly two thirds of the paper's numbers are in reach, including every
-mechanism ablation — which is where this reproduction's own contribution is.
+column (it runs the repo's *second* intervention copy, which drops `m_sys` and
+uses layers 4–10 — a different method needing its own implementation); the
+Shikra column (no maintained HF conversion, and the released code finds its
+visual span by the magic numbers `img_s==33 and img_e==290`); MME (dataset
+absent, and the Fox release ships no MME script despite reporting MME results);
+the GPT-4V judge (paid API); MMBench and MathVista; and the ICD / SID / OPERA /
+CausalMM baselines, each of which needs its upstream repo. Roughly two thirds of
+the paper's numbers are in reach, including every mechanism ablation — which is
+where this reproduction's own contribution is.
 
 ## Runbook notes
 
@@ -313,8 +358,8 @@ that failure is detectable after the fact.
 | POPE annotations (3000 × 3 splits, 500 images, 50/50 balanced) | shipped in `assets/` |
 | Kaggle bootstrap, host probe, notebook cells | done; host measured (2x T4, py3.13, torch 2.11, transformers 5.16.1) |
 | COCO images | fetched directly per-id (~100 MB for POPE) — no 6.2 GB zip |
-| Reproduction plan (53 jobs, ~87 GPU-h) | `fox-plan` tracks progress across sessions |
-| Total | **255 tests**, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
+| Reproduction plan | 53 jobs, ~87 GPU-h, split across sessions by one flag |
+| Total | **274 tests**, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
 | `fox/attention.py` — `AttentionInterface` wiring + dual-branch decode loop | done, 18 tests |
 | `sampling`, `fox`, `vcd` | done, 21 tests against a fake model |
 | `sid` | needs the upstream SID repo; the Fox release ships only a FastV skeleton |

@@ -225,6 +225,37 @@ pipeline" to "one ~50-sample oracle run".
 
 ---
 
+## Reproducing across sessions
+
+The paper prints 15 tables and 22 figures and this hardware cannot reach all
+of them; `foxrepro/bench/plan.py` records which, why, and what to run next.
+
+```bash
+python -m foxrepro.bench.plan --budget-hours 9     # a session's worth
+python -m foxrepro.bench.plan --calibrate          # re-measure s/sample
+```
+
+It predicts each job's run file, counts the records in it, and emits the next
+incomplete commands in priority order. Re-running an emitted command resumes,
+so a session dying mid-job costs only the in-flight sample. The round-trip
+job → command → run file is asserted for all 53 jobs, because if it drifted
+the plan would report zero progress forever and re-emit finished work.
+
+**53 jobs, ~87 GPU-hours** — about three weeks of Kaggle's 30/week quota.
+Priority order: Tables 1/8, 2 and 9 first (the LLaVA-1.5 column of every main
+table), then the mechanism audit, then the sensitivity sweeps.
+
+**Out of reach here, stated rather than left as a hole:** the InstructBLIP
+column (it runs the repo's *second* intervention copy, which drops `m_sys`
+and uses layers 4–10 — a different method needing its own implementation);
+the Shikra column (no maintained HF conversion, and the released code finds
+its visual span by the magic numbers `img_s==33 and img_e==290`); MME
+(dataset absent, and the Fox release ships no MME script despite reporting
+MME results); the GPT-4V judge (paid API); MMBench and MathVista; and the
+ICD / SID / OPERA / CausalMM baselines, each of which needs its upstream
+repo. Roughly two thirds of the paper's numbers are in reach, including every
+mechanism ablation — which is where this reproduction's own contribution is.
+
 ## Runbook notes
 
 **Generation and evaluation are separate programs, deliberately.**
@@ -282,7 +313,8 @@ that failure is detectable after the fact.
 | POPE annotations (3000 × 3 splits, 500 images, 50/50 balanced) | shipped in `assets/` |
 | Kaggle bootstrap, host probe, notebook cells | done; host measured (2x T4, py3.13, torch 2.11, transformers 5.16.1) |
 | COCO images | fetched directly per-id (~100 MB for POPE) — no 6.2 GB zip |
-| Total | **240 tests**, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
+| Reproduction plan (53 jobs, ~87 GPU-h) | `fox-plan` tracks progress across sessions |
+| Total | **255 tests**, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
 | `fox/attention.py` — `AttentionInterface` wiring + dual-branch decode loop | done, 18 tests |
 | `sampling`, `fox`, `vcd` | done, 21 tests against a fake model |
 | `sid` | needs the upstream SID repo; the Fox release ships only a FastV skeleton |

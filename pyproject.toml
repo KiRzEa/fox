@@ -27,6 +27,8 @@ fox-generate = "foxrepro.bench.generate:_main"
 fox-evaluate = "foxrepro.bench.evaluate:_main"
 fox-report = "foxrepro.bench.report:_main"
 fox-storage = "foxrepro.storage:_main"
+fox-plan = "foxrepro.bench.plan:_main"
+fox-fetch = "foxrepro.data.fetch_images:_main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

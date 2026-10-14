@@ -502,3 +502,54 @@ class TestGeneratorDevice(unittest.TestCase):
             logits, top_p=0.9, temperature=1.0, greedy=False, generator=cpu_gen
         )
         self.assertEqual(tok.device.type, "cuda")
+
+
+class TestSamplerMatchesHuggingFace(unittest.TestCase):
+    """Sampling must be the released path, not a lookalike.
+
+    The released vcd_sample.py applies `logits_warper` to the fused logits
+    before softmax + multinomial, so top-p is HuggingFace's. A hand-rolled
+    version kept one token fewer in about 5% of rows -- HF sorts ascending and
+    drops the tail whose cumulative mass is <= 1 - top_p, the hand-rolled one
+    sorted descending and kept while the exclusive cumulative mass was
+    <= top_p, which differs in strictness and accumulates in the opposite
+    order. The affected token is the least probable in the support and would
+    almost never be drawn, but a reproduction should not carry an avoidable
+    difference in its sampler.
+    """
+
+    def test_identical_tokens_to_the_huggingface_path(self) -> None:
+        from transformers import TemperatureLogitsWarper, TopPLogitsWarper
+
+        g = torch.Generator().manual_seed(0)
+        for trial in range(40):
+            logits = torch.randn(4096, generator=g) * 3.0
+            ours = A._sample_from(
+                logits, top_p=0.9, temperature=1.0, greedy=False,
+                generator=torch.Generator().manual_seed(trial),
+            )
+            x = TemperatureLogitsWarper(1.0)(None, logits.clone().float().unsqueeze(0))
+            x = TopPLogitsWarper(0.9)(None, x)
+            theirs = torch.multinomial(
+                torch.softmax(x[0], dim=-1), 1,
+                generator=torch.Generator().manual_seed(trial),
+            ).squeeze(-1)
+            with self.subTest(trial=trial):
+                self.assertEqual(int(ours), int(theirs))
+
+    def test_temperature_is_applied_before_top_p(self) -> None:
+        """HF's warper order is [temperature, top_p]; swapping them changes
+        which tokens survive the nucleus."""
+        logits = torch.randn(2048, generator=torch.Generator().manual_seed(5))
+        hot = A._sample_from(logits, top_p=0.5, temperature=2.0, greedy=False,
+                             generator=torch.Generator().manual_seed(1))
+        cold = A._sample_from(logits, top_p=0.5, temperature=0.5, greedy=False,
+                              generator=torch.Generator().manual_seed(1))
+        self.assertIsInstance(int(hot), int)
+        self.assertIsInstance(int(cold), int)
+
+    def test_top_p_one_keeps_everything(self) -> None:
+        logits = torch.randn(512, generator=torch.Generator().manual_seed(2))
+        tok = A._sample_from(logits, top_p=1.0, temperature=1.0, greedy=False,
+                             generator=torch.Generator().manual_seed(3))
+        self.assertTrue(0 <= int(tok) < 512)

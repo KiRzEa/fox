@@ -462,30 +462,45 @@ def _sample_from(
 ) -> torch.Tensor:
     """Nucleus sampling or argmax over a single ``[V]`` logit row.
 
-    ``torch.multinomial`` requires its generator to live on the same device as
-    the probabilities. With ``device_map="auto"`` the logits come back on
-    whichever device accelerate put the head on, which is not something this
-    function should have to know -- so if the devices disagree, the single
-    32k-wide vector is moved to the generator's device. That costs nothing
-    measurable and makes a seeded run reproduce the same tokens regardless of
-    how the model happened to be sharded, which matters when comparing a
-    2x T4 run against a single-GPU one.
+    Top-p goes through HuggingFace's own ``TemperatureLogitsWarper`` and
+    ``TopPLogitsWarper``, in that order, because that is exactly what the
+    released code does: ``vcd_sample.py`` applies ``logits_warper`` to the
+    fused logits before ``softmax`` + ``multinomial``.
+
+    This was originally hand-rolled, and the hand-rolled version kept one
+    token fewer than HuggingFace in about 5% of rows. HF sorts ascending and
+    drops the tail whose cumulative mass is ``<= 1 - top_p``; the hand-rolled
+    version sorted descending and kept while the exclusive cumulative mass was
+    ``<= top_p``. Those boundaries differ in strictness, and the two cumulative
+    sums accumulate in opposite order so they also differ in the last bits. The
+    affected token is always the least probable one in the support and would
+    almost never be drawn -- but "almost never" is not "never", and a
+    reproduction should not carry an avoidable difference in its sampler.
+
+    ``torch.multinomial`` requires its generator on the same device as the
+    probabilities. With ``device_map="auto"`` the logits come back on whichever
+    device accelerate put the head on, which is not something this function
+    should have to know -- so if the devices disagree, the single 32k-wide
+    vector is moved to the generator's device. That costs nothing measurable
+    and makes a seeded run reproduce the same tokens regardless of how the
+    model happened to be sharded.
     """
     if greedy:
         return logits.argmax(dim=-1)
+
+    from transformers import TemperatureLogitsWarper, TopPLogitsWarper
+
     out_device = logits.device
     if generator is not None and generator.device != logits.device:
         logits = logits.to(generator.device)
-    x = logits / max(temperature, 1e-6)
-    probs = F.softmax(x.float(), dim=-1)
-    order = probs.argsort(descending=True)
-    sorted_probs = probs[order]
-    keep = sorted_probs.cumsum(dim=-1) - sorted_probs <= top_p
-    keep[0] = True
-    filtered = torch.zeros_like(probs)
-    filtered[order[keep]] = sorted_probs[keep]
-    filtered = filtered / filtered.sum()
-    tok = torch.multinomial(filtered, 1, generator=generator).squeeze(-1)
+
+    x = logits.float().unsqueeze(0)
+    if temperature != 1.0:
+        x = TemperatureLogitsWarper(max(temperature, 1e-6))(None, x)
+    if top_p < 1.0:
+        x = TopPLogitsWarper(top_p)(None, x)
+    probs = F.softmax(x[0], dim=-1)
+    tok = torch.multinomial(probs, 1, generator=generator).squeeze(-1)
     return tok.to(out_device)
 
 

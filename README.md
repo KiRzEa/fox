@@ -71,6 +71,12 @@ The last one reframes the project: the expected honest result is that Fox beats
 the weak baselines significantly, while its advantage over OPERA and CausalMM is
 not statistically resolvable at n=500.
 
+Every difference between this implementation and the released code is
+catalogued in [docs/DEVIATIONS.md](docs/DEVIATIONS.md), classified by whether
+it can change a number: proven bit-identical, verified-equivalent
+reimplementation, deviation that can move a result, present only there,
+present only here, and still unverified.
+
 ## The design that makes this safe
 
 The paper's mechanism is a *numerical* effect, so a reimplementation is
@@ -371,7 +377,8 @@ that failure is detectable after the fact.
 | Kaggle bootstrap, host probe, notebook cells | done; host measured (2x T4, py3.13, torch 2.11, transformers 5.16.1) |
 | COCO images | fetched directly per-id (~100 MB for POPE) — no 6.2 GB zip |
 | Reproduction plan | 53 jobs, ~87 GPU-h, split across sessions by one flag |
-| Total | **282 tests**, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
+| Total | **285 tests** |
+| Deviations from the release | [docs/DEVIATIONS.md](docs/DEVIATIONS.md) — every difference, classified by whether it can change a number, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
 | `fox/attention.py` — `AttentionInterface` wiring + dual-branch decode loop | done, 18 tests |
 | `sampling`, `fox`, `vcd` | done, 21 tests against a fake model |
 | `sid` | needs the upstream SID repo; the Fox release ships only a FastV skeleton |

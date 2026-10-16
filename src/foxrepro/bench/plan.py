@@ -295,41 +295,67 @@ PLAN: List[Job] = _build_plan()
 # --------------------------------------------------------------------------- #
 # sharding across independent sessions
 # --------------------------------------------------------------------------- #
-#: Session 1 when ``--pilot`` is set. All on POPE-adversarial: the hardest
-#: split, where the paper claims its largest gain, so everything is comparable
-#: within one session.
+#: The first sessions when ``--pilot`` is set, pinned rather than
+#: cost-balanced.
 #:
-#: Cost-balancing alone optimises the wrong thing for a FIRST session. It would
-#: hand you a baseline on one split and the method on another, and ten GPU
-#: hours later you could not compare anything. These four answer three
-#: questions instead:
+#: Cost-balancing optimises the wrong thing early. It would hand you a baseline
+#: on one split and the method on another, and twenty GPU hours later nothing
+#: could be compared -- the one thing the first sessions have to deliver.
 #:
-#:   sampling vs fox            -- does the headline result reproduce at all?
-#:   fox vs fox --mode off      -- is the gain the intervention, or just the
-#:                                 additive fusion? The paper never ran this.
-#:   fox vs fox --mode ulp_control -- is the mechanism requantization?
-PILOT = (
-    ("table1", "sampling", "as_implemented"),
-    ("table1", "fox", "as_implemented"),
-    ("controls", "fox", "off"),
-    ("controls", "fox", "ulp_control"),
+#: Session 1 is POPE-adversarial: the hardest split, where the paper claims its
+#: largest POPE gain. Session 2 is CHAIR, which matters more than it looks:
+#: the paper's headline "29.1% over SID" is a CHAIR number, the gap there is
+#: large (57.60 -> 46.40) rather than inside sampling noise as the POPE gaps
+#: are, and 500 captions cost less GPU time than 3000 POPE questions. So the
+#: mechanism experiments go there too.
+PILOT_SESSIONS: Tuple[Tuple[Dict[str, object], ...], ...] = (
+    # --- session 1: does the POPE result reproduce, and why? ---------------
+    (
+        {"target": "table1", "method": "sampling"},          # the reference
+        {"target": "table1", "method": "fox"},               # the headline claim
+        {"target": "controls", "mode": "off"},               # fusion, no intervention
+        {"target": "controls", "mode": "ulp_control"},       # requantization instead
+    ),
+    # --- session 2: CHAIR, where the headline gain actually lives ----------
+    (
+        {"target": "table2", "method": "sampling"},
+        {"target": "table2", "method": "fox"},
+        {"target": "controls", "mode": "off", "benchmark": "chair"},
+        {"target": "dtype_arms", "logit_dtype": "fp32"},     # should null the effect
+        {"target": "dtype_arms", "logit_dtype": "bf16"},     # should overshoot it
+        {"target": "gamma_sweep", "gamma": 1e2, "benchmark": "chair"},
+        {"target": "gamma_sweep", "gamma": 1e3, "benchmark": "chair"},
+        {"target": "gamma_sweep", "gamma": 6e4, "benchmark": "chair"},
+    ),
+)
+
+#: Session 1 is POPE-adversarial unless a selector says otherwise; session 2 is
+#: CHAIR. Applied as defaults so the selectors above stay readable.
+_PILOT_DEFAULTS = (
+    {"benchmark": "pope", "split": "adversarial", "decoding": "sampling"},
+    {"benchmark": "chair", "split": "val2014_500", "decoding": "sampling"},
 )
 
 
-def pilot_jobs(jobs: Iterable[Job] = ()) -> List[Job]:
-    """The four POPE-adversarial jobs that make session 1 conclusive."""
+def _matches(job: Job, spec: Dict[str, object]) -> bool:
+    return all(getattr(job, k) == v for k, v in spec.items())
+
+
+def pilot_jobs(jobs: Iterable[Job] = ()) -> List[List[Job]]:
+    """The pinned opening sessions, as a list of job lists."""
     jobs = list(jobs) or PLAN
-    out = []
-    for target, method, mode in PILOT:
-        for j in jobs:
-            if (j.target == target and j.method == method and j.mode == mode
-                    and j.benchmark == "pope" and j.split == "adversarial"
-                    and j.decoding == "sampling" and j.gamma is None
-                    and j.k is None and j.tau_js is None and j.alpha is None):
-                out.append(j)
-                break
-        else:
-            raise LookupError(f"pilot job not in the plan: {target}/{method}/{mode}")
+    out: List[List[Job]] = []
+    for specs, defaults in zip(PILOT_SESSIONS, _PILOT_DEFAULTS):
+        picked: List[Job] = []
+        for spec in specs:
+            full = {**defaults, **spec}
+            for j in jobs:
+                if _matches(j, full) and j not in picked:
+                    picked.append(j)
+                    break
+            else:
+                raise LookupError(f"pilot job not in the plan: {full}")
+        out.append(picked)
     return out
 
 
@@ -354,14 +380,16 @@ def partition_jobs(n_sessions: int, jobs: Iterable[Job] = (),
         raise ValueError("n_sessions must be >= 1")
     jobs = list(jobs) or PLAN
 
-    first: List[Job] = []
+    pinned: List[List[Job]] = []
     if pilot:
-        if n_sessions < 2:
-            raise ValueError("--pilot needs at least 2 sessions")
-        first = pilot_jobs(jobs)
-        chosen = {id(j) for j in first}
+        pinned = pilot_jobs(jobs)
+        if n_sessions <= len(pinned):
+            raise ValueError(
+                f"--pilot pins {len(pinned)} sessions; need more than that"
+            )
+        chosen = {id(j) for g in pinned for j in g}
         jobs = [j for j in jobs if id(j) not in chosen]
-        n_sessions -= 1
+        n_sessions -= len(pinned)
 
     buckets: List[List[Job]] = [[] for _ in range(n_sessions)]
     loads = [0.0] * n_sessions
@@ -373,8 +401,7 @@ def partition_jobs(n_sessions: int, jobs: Iterable[Job] = (),
     # then leaves more completed jobs behind than one that began with a 2.3 h
     # job and got cut at 90%.
     rest = [sorted(b, key=lambda j: j.est_seconds()) for b in buckets]
-    return ([sorted(first, key=lambda j: j.est_seconds())] + rest
-            if pilot else rest)
+    return [sorted(g, key=lambda j: j.est_seconds()) for g in pinned] + rest
 
 
 def ingest_runs(

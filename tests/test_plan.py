@@ -509,53 +509,65 @@ class TestSessionBudget(unittest.TestCase):
                 self.assertGreater(deadline, budget * 0.4)
 
 
-class TestPilotSession(unittest.TestCase):
-    """Session 1 must be conclusive on its own.
+class TestPilotSessions(unittest.TestCase):
+    """The pinned opening sessions must each be conclusive on their own.
 
-    Cost-balancing alone optimises the wrong thing for a first session: it
-    would hand you a baseline on one split and the method on another, and ten
-    GPU hours later nothing could be compared. --pilot pins the four
-    POPE-adversarial jobs that answer three questions within one session.
+    Session 1 is POPE-adversarial; session 2 is CHAIR, which matters more than
+    it looks -- the paper's headline "29.1% over SID" is a CHAIR number, the
+    gap there is large rather than inside sampling noise as the POPE gaps are,
+    and 500 captions cost less GPU time than 3000 POPE questions.
     """
 
-    def test_pilot_is_four_comparable_jobs(self) -> None:
+    def test_two_sessions_are_pinned(self) -> None:
         from foxrepro.bench.plan import pilot_jobs
 
-        jobs = pilot_jobs()
-        self.assertEqual(len(jobs), 4)
-        for j in jobs:
-            self.assertEqual(j.benchmark, "pope")
-            self.assertEqual(j.split, "adversarial")
-            self.assertEqual(j.decoding, "sampling")
-        self.assertEqual([j.method for j in jobs],
-                         ["sampling", "fox", "fox", "fox"])
-        self.assertEqual([j.mode for j in jobs][1:],
-                         ["as_implemented", "off", "ulp_control"])
+        groups = pilot_jobs()
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(len(groups[0]), 4)
+        self.assertEqual(len(groups[1]), 8)
 
-    def test_pilot_fits_a_ten_hour_session(self) -> None:
+    def test_session_one_is_all_pope_adversarial(self) -> None:
         from foxrepro.bench.plan import pilot_jobs
 
-        hours = sum(j.est_seconds() for j in pilot_jobs()) / 3600
-        self.assertLess(hours, 10.0)
-        self.assertGreater(hours, 5.0)
+        for j in pilot_jobs()[0]:
+            self.assertEqual((j.benchmark, j.split), ("pope", "adversarial"))
 
-    def test_pilot_partition_is_still_disjoint_and_complete(self) -> None:
+    def test_session_two_is_all_chair(self) -> None:
+        from foxrepro.bench.plan import pilot_jobs
+
+        for j in pilot_jobs()[1]:
+            self.assertEqual(j.benchmark, "chair")
+
+    def test_session_two_carries_the_mechanism_tests(self) -> None:
+        """fp32 should null the effect, bf16 overshoot it, gamma trace the ULP."""
+        from foxrepro.bench.plan import pilot_jobs
+
+        jobs = pilot_jobs()[1]
+        self.assertEqual({j.logit_dtype for j in jobs} & {"fp32", "bf16"},
+                         {"fp32", "bf16"})
+        self.assertEqual({j.gamma for j in jobs} - {None}, {1e2, 1e3, 6e4})
+
+    def test_both_sessions_fit_the_budget(self) -> None:
+        from foxrepro.bench.plan import pilot_jobs
+
+        for g in pilot_jobs():
+            self.assertLess(sum(j.est_seconds() for j in g) / 3600, 10.0)
+
+    def test_no_job_appears_in_both_pinned_sessions(self) -> None:
+        from foxrepro.bench.plan import pilot_jobs
+
+        a, b = pilot_jobs()
+        self.assertFalse({j.job_id() for j in a} & {j.job_id() for j in b})
+
+    def test_partition_stays_disjoint_and_complete(self) -> None:
         from foxrepro.bench.plan import partition_jobs
 
-        groups = partition_jobs(10, pilot=True)
-        ids = [j.job_id() for g in groups for j in g]
+        ids = [j.job_id() for g in partition_jobs(10, pilot=True) for j in g]
         self.assertEqual(len(ids), len(PLAN))
         self.assertEqual(len(set(ids)), len(PLAN))
 
-    def test_pilot_jobs_land_in_session_one(self) -> None:
-        from foxrepro.bench.plan import partition_jobs, pilot_jobs
-
-        first = partition_jobs(10, pilot=True)[0]
-        self.assertEqual({j.job_id() for j in first},
-                         {j.job_id() for j in pilot_jobs()})
-
-    def test_pilot_needs_at_least_two_sessions(self) -> None:
+    def test_pilot_needs_more_sessions_than_it_pins(self) -> None:
         from foxrepro.bench.plan import partition_jobs
 
         with self.assertRaises(ValueError):
-            partition_jobs(1, pilot=True)
+            partition_jobs(2, pilot=True)

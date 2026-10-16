@@ -241,8 +241,24 @@ concurrent sessions of ~17.4 h each.
 Freeze the split once, locally, and commit it:
 
 ```bash
-python -m foxrepro.bench.plan plan --sessions 9      # -> scripts/run_plan.json
+python -m foxrepro.bench.plan plan --sessions 10 --pilot   # -> scripts/run_plan.json
 ```
+
+`--pilot` pins the first two sessions rather than cost-balancing them.
+Cost-balancing optimises the wrong thing early: it would give session 1 a
+baseline on one split and the method on another, and twenty GPU hours later
+nothing could be compared.
+
+**Session 1** (8.2 h, all POPE-adversarial) — does the POPE result reproduce,
+and why: `sampling`, `fox`, `fox --mode off` (fusion without the
+intervention, a control the paper never ran), `fox --mode ulp_control`.
+
+**Session 2** (8.4 h, all CHAIR) — CHAIR matters more than it looks: the
+paper's headline "29.1% over SID" is a CHAIR number, the gap there is large
+rather than inside sampling noise as the POPE gaps are, and 500 captions cost
+less GPU time than 3000 POPE questions. So the mechanism tests go there:
+`--logit-dtype fp32` (should null the effect), `bf16` (should overshoot it),
+and γ at 1e2 / 1e3 / 6e4 (should track the fp16 ULP, not γ).
 
 87 GPU-hours at **10 h per session needs 9 sessions**, not five. `plan` warns
 when a session's estimate exceeds the budget; its last job is then deferred
@@ -377,7 +393,7 @@ that failure is detectable after the fact.
 | Kaggle bootstrap, host probe, notebook cells | done; host measured (2x T4, py3.13, torch 2.11, transformers 5.16.1) |
 | COCO images | fetched directly per-id (~100 MB for POPE) — no 6.2 GB zip |
 | Reproduction plan | 53 jobs, ~87 GPU-h, split across sessions by one flag |
-| Total | **285 tests** |
+| Total | **293 tests** |
 | Deviations from the release | [docs/DEVIATIONS.md](docs/DEVIATIONS.md) — every difference, classified by whether it can change a number, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
 | `fox/attention.py` — `AttentionInterface` wiring + dual-branch decode loop | done, 18 tests |
 | `sampling`, `fox`, `vcd` | done, 21 tests against a fake model |

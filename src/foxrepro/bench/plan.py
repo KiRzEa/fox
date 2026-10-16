@@ -295,7 +295,46 @@ PLAN: List[Job] = _build_plan()
 # --------------------------------------------------------------------------- #
 # sharding across independent sessions
 # --------------------------------------------------------------------------- #
-def partition_jobs(n_sessions: int, jobs: Iterable[Job] = ()) -> List[List[Job]]:
+#: Session 1 when ``--pilot`` is set. All on POPE-adversarial: the hardest
+#: split, where the paper claims its largest gain, so everything is comparable
+#: within one session.
+#:
+#: Cost-balancing alone optimises the wrong thing for a FIRST session. It would
+#: hand you a baseline on one split and the method on another, and ten GPU
+#: hours later you could not compare anything. These four answer three
+#: questions instead:
+#:
+#:   sampling vs fox            -- does the headline result reproduce at all?
+#:   fox vs fox --mode off      -- is the gain the intervention, or just the
+#:                                 additive fusion? The paper never ran this.
+#:   fox vs fox --mode ulp_control -- is the mechanism requantization?
+PILOT = (
+    ("table1", "sampling", "as_implemented"),
+    ("table1", "fox", "as_implemented"),
+    ("controls", "fox", "off"),
+    ("controls", "fox", "ulp_control"),
+)
+
+
+def pilot_jobs(jobs: Iterable[Job] = ()) -> List[Job]:
+    """The four POPE-adversarial jobs that make session 1 conclusive."""
+    jobs = list(jobs) or PLAN
+    out = []
+    for target, method, mode in PILOT:
+        for j in jobs:
+            if (j.target == target and j.method == method and j.mode == mode
+                    and j.benchmark == "pope" and j.split == "adversarial"
+                    and j.decoding == "sampling" and j.gamma is None
+                    and j.k is None and j.tau_js is None and j.alpha is None):
+                out.append(j)
+                break
+        else:
+            raise LookupError(f"pilot job not in the plan: {target}/{method}/{mode}")
+    return out
+
+
+def partition_jobs(n_sessions: int, jobs: Iterable[Job] = (),
+                   pilot: bool = False) -> List[List[Job]]:
     """Split the plan into ``n_sessions`` cost-balanced, disjoint groups.
 
     Longest-processing-time-first: sort by estimated cost descending and give
@@ -314,6 +353,16 @@ def partition_jobs(n_sessions: int, jobs: Iterable[Job] = ()) -> List[List[Job]]
     if n_sessions < 1:
         raise ValueError("n_sessions must be >= 1")
     jobs = list(jobs) or PLAN
+
+    first: List[Job] = []
+    if pilot:
+        if n_sessions < 2:
+            raise ValueError("--pilot needs at least 2 sessions")
+        first = pilot_jobs(jobs)
+        chosen = {id(j) for j in first}
+        jobs = [j for j in jobs if id(j) not in chosen]
+        n_sessions -= 1
+
     buckets: List[List[Job]] = [[] for _ in range(n_sessions)]
     loads = [0.0] * n_sessions
     for job in sorted(jobs, key=lambda j: -j.est_seconds()):
@@ -323,7 +372,9 @@ def partition_jobs(n_sessions: int, jobs: Iterable[Job] = ()) -> List[List[Job]]
     # Within a session, run the cheap jobs first: a session that dies early
     # then leaves more completed jobs behind than one that began with a 2.3 h
     # job and got cut at 90%.
-    return [sorted(b, key=lambda j: j.est_seconds()) for b in buckets]
+    rest = [sorted(b, key=lambda j: j.est_seconds()) for b in buckets]
+    return ([sorted(first, key=lambda j: j.est_seconds())] + rest
+            if pilot else rest)
 
 
 def ingest_runs(
@@ -627,6 +678,7 @@ def render_plan(budget_hours: float = 9.0, runs_root: Optional[Path] = None) -> 
 def freeze_plan(
     n_sessions: int, budget_hours: float, plan_path: Path,
     calibrate: Optional[Path] = None, round_tag: str = "r1",
+    pilot: bool = False,
 ) -> Dict[str, object]:
     """Partition the plan and write it to disk.
 
@@ -651,7 +703,7 @@ def freeze_plan(
                     continue
 
     jobs = PLAN
-    groups = partition_jobs(n_sessions, jobs)
+    groups = partition_jobs(n_sessions, jobs, pilot=pilot)
     payload: Dict[str, object] = {
         "round": round_tag,
         "n_sessions": n_sessions,
@@ -845,6 +897,12 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     a.add_argument("--calibrate", type=Path, default=None,
                    help="a _job_times.tsv written by `run`, to replace estimates")
     a.add_argument("--round", default="r1", help="tag for the pack filenames")
+    a.add_argument("--pilot", action="store_true",
+                   help="pin session 1 to the four POPE-adversarial jobs "
+                        "that make it conclusive on its own: baseline, "
+                        "fox, fox --mode off, fox --mode ulp_control. "
+                        "Cost-balancing alone would spread those across "
+                        "sessions and leave the first one uncomparable.")
     a.add_argument("--out", type=Path, default=default_plan)
 
     a = sub.add_parser("run", help="execute one session (on Kaggle)")
@@ -880,7 +938,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     if cmd == "plan":
         payload = freeze_plan(args.sessions, args.budget_hours, args.out,
-                              args.calibrate, args.round)
+                              args.calibrate, args.round, pilot=args.pilot)
         print(f"# Wrote {args.out}  (round {payload['round']}, "
               f"{payload['n_calibrated']} calibrated estimates)\n")
         print("| session | jobs | est GPU-h |")

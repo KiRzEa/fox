@@ -507,3 +507,55 @@ class TestSessionBudget(unittest.TestCase):
                 deadline = max(budget - 0.25, budget * 0.5)
                 self.assertLess(deadline, budget)
                 self.assertGreater(deadline, budget * 0.4)
+
+
+class TestPilotSession(unittest.TestCase):
+    """Session 1 must be conclusive on its own.
+
+    Cost-balancing alone optimises the wrong thing for a first session: it
+    would hand you a baseline on one split and the method on another, and ten
+    GPU hours later nothing could be compared. --pilot pins the four
+    POPE-adversarial jobs that answer three questions within one session.
+    """
+
+    def test_pilot_is_four_comparable_jobs(self) -> None:
+        from foxrepro.bench.plan import pilot_jobs
+
+        jobs = pilot_jobs()
+        self.assertEqual(len(jobs), 4)
+        for j in jobs:
+            self.assertEqual(j.benchmark, "pope")
+            self.assertEqual(j.split, "adversarial")
+            self.assertEqual(j.decoding, "sampling")
+        self.assertEqual([j.method for j in jobs],
+                         ["sampling", "fox", "fox", "fox"])
+        self.assertEqual([j.mode for j in jobs][1:],
+                         ["as_implemented", "off", "ulp_control"])
+
+    def test_pilot_fits_a_ten_hour_session(self) -> None:
+        from foxrepro.bench.plan import pilot_jobs
+
+        hours = sum(j.est_seconds() for j in pilot_jobs()) / 3600
+        self.assertLess(hours, 10.0)
+        self.assertGreater(hours, 5.0)
+
+    def test_pilot_partition_is_still_disjoint_and_complete(self) -> None:
+        from foxrepro.bench.plan import partition_jobs
+
+        groups = partition_jobs(10, pilot=True)
+        ids = [j.job_id() for g in groups for j in g]
+        self.assertEqual(len(ids), len(PLAN))
+        self.assertEqual(len(set(ids)), len(PLAN))
+
+    def test_pilot_jobs_land_in_session_one(self) -> None:
+        from foxrepro.bench.plan import partition_jobs, pilot_jobs
+
+        first = partition_jobs(10, pilot=True)[0]
+        self.assertEqual({j.job_id() for j in first},
+                         {j.job_id() for j in pilot_jobs()})
+
+    def test_pilot_needs_at_least_two_sessions(self) -> None:
+        from foxrepro.bench.plan import partition_jobs
+
+        with self.assertRaises(ValueError):
+            partition_jobs(1, pilot=True)

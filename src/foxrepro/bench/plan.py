@@ -295,46 +295,66 @@ PLAN: List[Job] = _build_plan()
 # --------------------------------------------------------------------------- #
 # sharding across independent sessions
 # --------------------------------------------------------------------------- #
-#: The first sessions when ``--pilot`` is set, pinned rather than
-#: cost-balanced.
+#: Session 1 when ``--pilot`` is set, pinned rather than cost-balanced.
 #:
-#: Cost-balancing optimises the wrong thing early. It would hand you a baseline
-#: on one split and the method on another, and twenty GPU hours later nothing
-#: could be compared -- the one thing the first sessions have to deliver.
+#: It answers exactly one question: **do the paper's numbers reproduce?**
+#: Nothing about mechanism, because that only becomes worth asking once there
+#: is a result to explain. If Fox does not beat the baseline here, every
+#: control downstream is measuring a difference that does not exist.
 #:
-#: Session 1 is POPE-adversarial: the hardest split, where the paper claims its
-#: largest POPE gain. Session 2 is CHAIR, which matters more than it looks:
-#: the paper's headline "29.1% over SID" is a CHAIR number, the gap there is
-#: large (57.60 -> 46.40) rather than inside sampling noise as the POPE gaps
-#: are, and 500 captions cost less GPU time than 3000 POPE questions. So the
-#: mechanism experiments go there too.
+#: Cost-balancing optimises the wrong thing for this. It would give session 1 a
+#: baseline on one split and the method on another, and ten GPU hours later
+#: nothing could be compared.
+#:
+#: Six jobs, baseline and method on each of the paper's three main tables:
+#:
+#:   Table 1  POPE-adversarial   the hardest split, largest claimed POPE gain
+#:                               (76.77 -> 81.93); the random and popular gaps
+#:                               are inside sampling noise anyway
+#:   Table 2  CHAIR              where the headline lives: 57.60 -> 46.40, and
+#:                               the abstract's "29.1% over SID" is a CHAIR
+#:                               number. 500 captions also cost less than 3000
+#:                               POPE questions
+#:   Table 9  CHAIR greedy       the paper's own de-randomisation. Greedy is
+#:                               deterministic, so with one seed it is a
+#:                               SHARPER reproducibility signal than sampling,
+#:                               which carries its own variance
+#:
+#: VCD is deliberately absent. What this repo can run is VCD's noised branch
+#: inside Fox's fusion (see docs/DEVIATIONS.md), not VCD proper, so its row
+#: says nothing about whether the paper reproduces.
 PILOT_SESSIONS: Tuple[Tuple[Dict[str, object], ...], ...] = (
-    # --- session 1: does the POPE result reproduce, and why? ---------------
     (
-        {"target": "table1", "method": "sampling"},          # the reference
-        {"target": "table1", "method": "fox"},               # the headline claim
-        {"target": "controls", "mode": "off"},               # fusion, no intervention
-        {"target": "controls", "mode": "ulp_control"},       # requantization instead
-    ),
-    # --- session 2: CHAIR, where the headline gain actually lives ----------
-    (
-        {"target": "table2", "method": "sampling"},
-        {"target": "table2", "method": "fox"},
-        {"target": "controls", "mode": "off", "benchmark": "chair"},
-        {"target": "dtype_arms", "logit_dtype": "fp32"},     # should null the effect
-        {"target": "dtype_arms", "logit_dtype": "bf16"},     # should overshoot it
-        {"target": "gamma_sweep", "gamma": 1e2, "benchmark": "chair"},
-        {"target": "gamma_sweep", "gamma": 1e3, "benchmark": "chair"},
-        {"target": "gamma_sweep", "gamma": 6e4, "benchmark": "chair"},
+        {"target": "table1", "method": "sampling", "split": "adversarial"},
+        {"target": "table1", "method": "fox", "split": "adversarial"},
+        {"target": "table2", "method": "sampling", "benchmark": "chair"},
+        {"target": "table2", "method": "fox", "benchmark": "chair"},
+        {"target": "table9", "method": "sampling", "benchmark": "chair"},
+        {"target": "table9", "method": "fox", "benchmark": "chair"},
     ),
 )
 
-#: Session 1 is POPE-adversarial unless a selector says otherwise; session 2 is
-#: CHAIR. Applied as defaults so the selectors above stay readable.
+#: Defaults applied under each session's selectors, so they stay readable.
 _PILOT_DEFAULTS = (
-    {"benchmark": "pope", "split": "adversarial", "decoding": "sampling"},
-    {"benchmark": "chair", "split": "val2014_500", "decoding": "sampling"},
+    {"benchmark": "pope", "split": "adversarial", "decoding": "sampling",
+     "mode": "as_implemented", "logit_dtype": "native"},
 )
+
+
+def _pilot_defaults_for(spec: Dict[str, object], base: Dict[str, object]
+                        ) -> Dict[str, object]:
+    """Merge a selector over the session defaults, letting it override them.
+
+    A CHAIR selector has to drop the POPE split, and a Table 9 selector has to
+    set greedy decoding, so the defaults cannot simply be unioned.
+    """
+    full = dict(base)
+    full.update(spec)
+    if full.get("benchmark") == "chair":
+        full["split"] = "val2014_500"
+    if spec.get("target") == "table9":
+        full["decoding"] = "greedy"
+    return full
 
 
 def _matches(job: Job, spec: Dict[str, object]) -> bool:
@@ -348,7 +368,7 @@ def pilot_jobs(jobs: Iterable[Job] = ()) -> List[List[Job]]:
     for specs, defaults in zip(PILOT_SESSIONS, _PILOT_DEFAULTS):
         picked: List[Job] = []
         for spec in specs:
-            full = {**defaults, **spec}
+            full = _pilot_defaults_for(spec, defaults)
             for j in jobs:
                 if _matches(j, full) and j not in picked:
                     picked.append(j)

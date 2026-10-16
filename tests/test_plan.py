@@ -510,54 +510,68 @@ class TestSessionBudget(unittest.TestCase):
 
 
 class TestPilotSessions(unittest.TestCase):
-    """The pinned opening sessions must each be conclusive on their own.
+    """Session 1 answers one question: do the paper's numbers reproduce?
 
-    Session 1 is POPE-adversarial; session 2 is CHAIR, which matters more than
-    it looks -- the paper's headline "29.1% over SID" is a CHAIR number, the
-    gap there is large rather than inside sampling noise as the POPE gaps are,
-    and 500 captions cost less GPU time than 3000 POPE questions.
+    Nothing about mechanism, because that only becomes worth asking once there
+    is a result to explain -- if Fox does not beat the baseline here, every
+    control downstream measures a difference that does not exist.
     """
 
-    def test_two_sessions_are_pinned(self) -> None:
+    def test_one_session_is_pinned(self) -> None:
         from foxrepro.bench.plan import pilot_jobs
 
         groups = pilot_jobs()
-        self.assertEqual(len(groups), 2)
-        self.assertEqual(len(groups[0]), 4)
-        self.assertEqual(len(groups[1]), 8)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(len(groups[0]), 6)
 
-    def test_session_one_is_all_pope_adversarial(self) -> None:
+    def test_it_covers_the_three_main_tables(self) -> None:
+        from foxrepro.bench.plan import pilot_jobs
+
+        self.assertEqual({j.target for j in pilot_jobs()[0]},
+                         {"table1", "table2", "table9"})
+
+    def test_each_table_has_both_baseline_and_method(self) -> None:
+        from foxrepro.bench.plan import pilot_jobs
+
+        by_target = {}
+        for j in pilot_jobs()[0]:
+            by_target.setdefault(j.target, set()).add(j.method)
+        for target, methods in by_target.items():
+            with self.subTest(target=target):
+                self.assertEqual(methods, {"sampling", "fox"},
+                                 "a table without both is not comparable")
+
+    def test_table9_jobs_are_greedy(self) -> None:
+        """Greedy is deterministic, so at one seed it is the sharper signal."""
         from foxrepro.bench.plan import pilot_jobs
 
         for j in pilot_jobs()[0]:
-            self.assertEqual((j.benchmark, j.split), ("pope", "adversarial"))
+            if j.target == "table9":
+                self.assertEqual(j.decoding, "greedy")
+            else:
+                self.assertEqual(j.decoding, "sampling")
 
-    def test_session_two_is_all_chair(self) -> None:
+    def test_no_mechanism_arm_is_pinned(self) -> None:
+        """Controls and sweeps come after reproducibility, not alongside it."""
         from foxrepro.bench.plan import pilot_jobs
 
-        for j in pilot_jobs()[1]:
-            self.assertEqual(j.benchmark, "chair")
+        for j in pilot_jobs()[0]:
+            self.assertEqual(j.mode, "as_implemented")
+            self.assertEqual(j.logit_dtype, "native")
+            self.assertIsNone(j.gamma)
 
-    def test_session_two_carries_the_mechanism_tests(self) -> None:
-        """fp32 should null the effect, bf16 overshoot it, gamma trace the ULP."""
+    def test_vcd_is_excluded(self) -> None:
+        """What this repo runs is VCD noise inside Fox's fusion, not VCD."""
         from foxrepro.bench.plan import pilot_jobs
 
-        jobs = pilot_jobs()[1]
-        self.assertEqual({j.logit_dtype for j in jobs} & {"fp32", "bf16"},
-                         {"fp32", "bf16"})
-        self.assertEqual({j.gamma for j in jobs} - {None}, {1e2, 1e3, 6e4})
+        self.assertNotIn("vcd", {j.method for j in pilot_jobs()[0]})
 
-    def test_both_sessions_fit_the_budget(self) -> None:
+    def test_it_fits_one_session(self) -> None:
         from foxrepro.bench.plan import pilot_jobs
 
-        for g in pilot_jobs():
-            self.assertLess(sum(j.est_seconds() for j in g) / 3600, 10.0)
-
-    def test_no_job_appears_in_both_pinned_sessions(self) -> None:
-        from foxrepro.bench.plan import pilot_jobs
-
-        a, b = pilot_jobs()
-        self.assertFalse({j.job_id() for j in a} & {j.job_id() for j in b})
+        hours = sum(j.est_seconds() for j in pilot_jobs()[0]) / 3600
+        self.assertLess(hours, 10.0)
+        self.assertGreater(hours, 4.0)
 
     def test_partition_stays_disjoint_and_complete(self) -> None:
         from foxrepro.bench.plan import partition_jobs
@@ -570,4 +584,4 @@ class TestPilotSessions(unittest.TestCase):
         from foxrepro.bench.plan import partition_jobs
 
         with self.assertRaises(ValueError):
-            partition_jobs(2, pilot=True)
+            partition_jobs(1, pilot=True)

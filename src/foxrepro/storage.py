@@ -118,12 +118,20 @@ SOFTMAX_DTYPES = ("fp32", "native")
 #: ``ulp_control``    replace the shift round trip with an explicit
 #:                    ``quantize_to_grid(logits, step)``. If this reproduces
 #:                    the gain, the mechanism is requantization, full stop.
+#: ``boost_visual``   the inverse of ``as_described``: a POSITIVE bias on the
+#:                    image-token keys, leaving the system keys alone. This is
+#:                    the experiment the paper's motivation rests on and never
+#:                    runs -- it argues from an observational comparison
+#:                    (Figure 1a) that amplifying visual attention cannot help,
+#:                    and never intervenes to check. PAI, its named
+#:                    representative, is in none of the paper's tables.
 #: ``noise_control``  add i.i.d. uniform noise of the same magnitude as the ULP
 #:                    grid, with no quantization structure. If this also
 #:                    reproduces the gain, the method is noise injection and
 #:                    the head-selection machinery is decorative.
 INTERVENTION_MODES = (
-    "off", "as_implemented", "as_described", "ulp_control", "noise_control",
+    "off", "as_implemented", "as_described", "boost_visual",
+    "ulp_control", "noise_control",
 )
 
 #: Every provenance field a JSONL record must carry. ``generate.py`` asserts

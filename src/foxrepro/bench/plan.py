@@ -251,6 +251,17 @@ def _build_plan() -> List[Job]:
                         gamma=gamma, note=f"gamma={gamma:g}, finer metric"))
 
     # Control arms, on the hardest split and on CHAIR where the gain is largest.
+    # boost_visual is ours, not the paper's: it runs the intervention the
+    # paper argues from and never performs. Small gammas, because this is
+    # an attention bias meant to be felt, not a precision artifact.
+    for gamma in (2.0, 4.0, 8.0):
+        jobs.append(Job("boost_visual", "fox", "chair", "val2014_500",
+                        mode="boost_visual", gamma=gamma,
+                        note=f"amplify visual attention, delta={gamma:g}"))
+    jobs.append(Job("boost_visual", "fox", "pope", "adversarial",
+                    mode="boost_visual", gamma=4.0,
+                    note="amplify visual attention, delta=4"))
+
     for mode in ("off", "as_described", "ulp_control", "noise_control"):
         jobs.append(Job("controls", "fox", "pope", "adversarial", mode=mode,
                         note=f"mode={mode}"))

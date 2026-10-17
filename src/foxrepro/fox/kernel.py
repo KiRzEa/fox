@@ -271,6 +271,28 @@ def intervene(
             # fp32 round trip, then back to storage dtype. The shift cancels in
             # the stable fp32 softmax downstream; the cast's rounding does not.
             y = (target.to(torch.float32) - gamma).to(store_dtype)
+        elif mode == "boost_visual":
+            # The experiment the paper argues from but never runs.
+            #
+            # Its motivating claim is that amplifying visual attention cannot
+            # help, because Figure 1(a) shows faithful and hallucinated samples
+            # carry the same global visual attention mass. But that is an
+            # OBSERVATIONAL comparison, and the conclusion drawn from it is
+            # about an INTERVENTION -- exactly the P(Y|X) vs P(Y|do(X))
+            # distinction the paper takes as its theoretical foundation. A
+            # quantity uncorrelated with an outcome can still change it when
+            # intervened upon.
+            #
+            # PAI, named in the introduction as the representative of this
+            # family, appears twice in the paper and is in none of its tables.
+            # So: add a positive bias to the image-token keys at the same heads
+            # and query positions Fox suppresses, leaving the system-prompt keys
+            # untouched, and measure hallucination. Same slice as
+            # `as_described`, opposite sign.
+            y = target.clone()
+            v_s = max(0, min(img_start, K))
+            v_e = max(v_s, min(img_end + 1, K))
+            y[..., v_s:v_e] = y[..., v_s:v_e] + gamma
         elif mode == "as_described":
             # What Appendix B describes: an additive bias on the image-token
             # keys only, no round trip. Not shift-invariant, so this has a real

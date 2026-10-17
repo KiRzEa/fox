@@ -341,3 +341,65 @@ class TestModesAreDistinctInterventions(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBoostVisual(unittest.TestCase):
+    """The intervention the paper argues from and never performs.
+
+    Its motivation says amplifying visual attention cannot help, because
+    faithful and hallucinated samples carry the same global visual attention
+    mass (Figure 1a). That is an observational comparison and the conclusion
+    is about an intervention -- the P(Y|X) vs P(Y|do(X)) distinction the paper
+    takes as its own foundation. PAI, the named representative of that family,
+    appears twice in the paper and is in none of its tables.
+
+    So this mode adds a positive bias to the image-token keys at the same
+    heads and query positions Fox suppresses, leaving the system keys
+    untouched: the same slice as `as_described`, opposite sign.
+    """
+
+    def _run(self, mode: str, gamma: float = 4.0):
+        src = make_logits(b=1, h=8, q=16, k=SEQ, seed=21)
+        out, _ = intervene(src.clone(), IMG_START, IMG_END,
+                           mode=mode, gamma=gamma, ratio=0.35)
+        return src, out
+
+    def test_system_keys_are_untouched(self) -> None:
+        """Otherwise it is not 'boost visual', it is 'change everything'."""
+        src, out = self._run("boost_visual")
+        self.assertTrue(torch.equal(src[..., 0:IMG_START], out[..., 0:IMG_START]))
+
+    def test_image_keys_move_up(self) -> None:
+        src, out = self._run("boost_visual")
+        delta = (out.float() - src.float())[..., IMG_START:IMG_END + 1]
+        moved = delta[delta != 0]
+        self.assertGreater(moved.numel(), 0)
+        self.assertTrue(bool((moved > 0).all()), "must amplify, not suppress")
+
+    def test_it_is_the_mirror_of_as_described(self) -> None:
+        src_a, out_a = self._run("as_described")
+        src_b, out_b = self._run("boost_visual")
+        da = (out_a.float() - src_a.float())
+        db = (out_b.float() - src_b.float())
+        self.assertTrue(torch.allclose(da, -db, atol=1e-2))
+
+    def test_it_changes_the_attention_distribution(self) -> None:
+        """A no-op here would make the experiment meaningless."""
+        src, out = self._run("boost_visual")
+        a = torch.softmax(src.float(), dim=-1)
+        b = torch.softmax(out.float(), dim=-1)
+        tv = 0.5 * (a - b).abs().sum(-1).max().item()
+        self.assertGreater(tv, 0.1)
+
+    def test_bigger_delta_moves_more_mass_to_the_image(self) -> None:
+        shares = []
+        for gamma in (2.0, 8.0):
+            src, out = self._run("boost_visual", gamma)
+            p = torch.softmax(out.float(), dim=-1)
+            shares.append(p[..., IMG_START:IMG_END + 1].sum(-1).max().item())
+        self.assertGreater(shares[1], shares[0])
+
+    def test_the_mode_is_registered(self) -> None:
+        from foxrepro.storage import INTERVENTION_MODES
+
+        self.assertIn("boost_visual", INTERVENTION_MODES)

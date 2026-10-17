@@ -57,9 +57,11 @@ python3 -m foxrepro.data.fetch_images --what auto --session "$N" \
 
 # Kaggle gives a session no memory of the last one: /kaggle/working starts
 # empty, so resume would see no run files and redo work already paid for.
-# Attach previous sessions' result zips as a Dataset and they are picked up
-# here. Without this, re-running session 1 to finish its CHAIR jobs would
-# also redo its two POPE jobs -- 3.5 GPU-hours for nothing.
+# results/runs/ is the committed archive, so a plain `git clone` already
+# carries every finished job and this picks them up -- no Dataset to attach,
+# nothing to remember. /kaggle/input is still read for results that have not
+# been committed yet.
+python3 -m foxrepro.bench.plan ingest results/runs || true
 if [ -d /kaggle/input ]; then
   python3 -m foxrepro.bench.plan ingest /kaggle/input || true
 fi

@@ -598,3 +598,93 @@ class TestPilotSessions(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             partition_jobs(1, pilot=True)
+
+
+class TestArchive(unittest.TestCase):
+    """results/runs is the committed archive; the live runs dir is working state.
+
+    Tracking raw JSONL in git looks wasteful and is not: 63% of every record is
+    provenance repeated identically on all 3000 lines, so git stores 7.7 MB of
+    POPE runs in 0.34 MB. A clone then already carries every finished job, and
+    a fresh Kaggle session needs no attached Dataset for resume to work.
+    """
+
+    def setUp(self) -> None:
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.tmp = Path(td.name)
+        self.live = self.tmp / "live"
+        self.archive = self.tmp / "results" / "runs"
+
+    def _run_file(self, job, n: int, where: Path) -> Path:
+        import json as _json
+
+        where.mkdir(parents=True, exist_ok=True)
+        prov = cfg_from_command(job.command()).provenance()
+        f = where / job.run_key().filename()
+        with f.open("w") as fh:
+            for i in range(n):
+                rec = dict(prov)
+                rec.update(sample_id=f"q{i:07d}", image_id=i, prompt="p",
+                           output="Yes", latency_ms=1.0, n_prompt_tokens=600,
+                           n_gen_tokens=1, timestamp="2026-01-01T00:00:00Z",
+                           commit_hash="x", transformers_path="y", label="yes")
+                fh.write(_json.dumps(rec) + "\n")
+        return f
+
+    def test_live_runs_are_copied_into_the_archive(self) -> None:
+        from foxrepro.bench.plan import archive_runs
+
+        self._run_file(PLAN[0], 5, self.live)
+        rep = archive_runs(self.live, self.archive)
+        self.assertEqual(rep["copied"], 1)
+        self.assertEqual(len(list(self.archive.glob("*.jsonl"))), 1)
+
+    def test_a_job_finished_later_merges_rather_than_replaces(self) -> None:
+        """Half done in one session, finished in the next; both halves count."""
+        from foxrepro.bench.plan import archive_runs
+
+        self._run_file(PLAN[0], 3, self.live)
+        archive_runs(self.live, self.archive)
+        self._run_file(PLAN[0], 7, self.live)      # same job, more records
+        rep = archive_runs(self.live, self.archive)
+        self.assertEqual(rep["merged"], 1)
+        text = (self.archive / PLAN[0].run_key().filename()).read_text()
+        self.assertEqual(text.count('"q0000006"'), 1)
+        self.assertEqual(len(text.strip().splitlines()), 7)
+
+    def test_archiving_twice_adds_nothing(self) -> None:
+        from foxrepro.bench.plan import archive_runs
+
+        self._run_file(PLAN[0], 4, self.live)
+        archive_runs(self.live, self.archive)
+        rep = archive_runs(self.live, self.archive)
+        self.assertEqual(rep["copied"], 0)
+        self.assertEqual(rep["merged"], 0)
+        self.assertEqual(rep["skipped"], 1)
+
+    def test_no_live_directory_is_not_an_error(self) -> None:
+        from foxrepro.bench.plan import archive_runs
+
+        rep = archive_runs(self.tmp / "absent", self.archive)
+        self.assertEqual(rep["copied"], 0)
+        self.assertIn("note", rep)
+
+    def test_the_archive_is_tracked_by_git(self) -> None:
+        """A .gitignore rule once excluded every *.jsonl in the repo."""
+        import subprocess
+
+        from foxrepro.storage import paths
+
+        repo = paths().repo_root
+        probe = repo / "results" / "runs" / "_tracked_probe.jsonl"
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_text("{}\n")
+        try:
+            rc = subprocess.run(
+                ["git", "check-ignore", "-q", str(probe)],
+                cwd=repo, capture_output=True,
+            ).returncode
+            self.assertNotEqual(rc, 0, "results/runs/*.jsonl must not be ignored")
+        finally:
+            probe.unlink(missing_ok=True)

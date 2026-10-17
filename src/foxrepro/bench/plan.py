@@ -87,7 +87,7 @@ from foxrepro.storage import BENCHMARK_SPLITS, RunKey, paths
 
 __all__ = [
     "Job", "PLAN", "measured_cost", "scan_progress", "next_jobs", "render_plan",
-    "partition_jobs", "render_session", "ingest_runs",
+    "partition_jobs", "ingest_runs", "archive_runs",
 ]
 
 #: Seconds per sample, measured on 2x T4 with LLaVA-1.5-7B fp16 sharded.
@@ -727,6 +727,25 @@ def render_plan(budget_hours: float = 9.0, runs_root: Optional[Path] = None) -> 
     return "\n".join(lines)
 
 
+def archive_runs(
+    runs_root: Optional[Path] = None, dest: Optional[Path] = None,
+    dry_run: bool = False,
+) -> Dict[str, object]:
+    """Copy the live run files into the committed archive.
+
+    The inverse of the ingest the bootstrap does. Merging is by ``sample_id``
+    union, so archiving a job that was half done in one session and finished
+    in the next adds the new records rather than replacing the file -- both
+    halves are real GPU time.
+    """
+    runs_root = runs_root or paths().runs_root
+    dest = dest or (paths().repo_root / "results" / "runs")
+    if not runs_root.is_dir():
+        return {"dest": str(dest), "copied": 0, "merged": 0, "skipped": 0,
+                "files": [], "note": f"no live run directory at {runs_root}"}
+    return ingest_runs([runs_root], dest, dry_run=dry_run, inbox=dest)
+
+
 def freeze_plan(
     n_sessions: int, budget_hours: float, plan_path: Path,
     calibrate: Optional[Path] = None, round_tag: str = "r1",
@@ -975,12 +994,22 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     a.add_argument("--runs-dir", type=Path, default=None)
     a.add_argument("--dry-run", action="store_true")
 
+    a = sub.add_parser(
+        "archive", help="copy the live runs into results/runs for committing")
+    a.add_argument("--runs-dir", type=Path, default=None)
+    a.add_argument("--dest", type=Path, default=None)
+    a.add_argument("--dry-run", action="store_true")
+
     a = sub.add_parser("calibrate", help="measured seconds per sample")
     a.add_argument("--runs-dir", type=Path, default=None)
 
     args = ap.parse_args(argv)
     cmd = args.cmd or "list"
 
+    if cmd == "archive":
+        print(json.dumps(
+            archive_runs(args.runs_dir, args.dest, args.dry_run), indent=2))
+        return 0
     if cmd == "calibrate":
         print(json.dumps(measured_cost(args.runs_dir), indent=2))
         return 0

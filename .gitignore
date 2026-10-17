@@ -8,13 +8,23 @@ dist/
 venv/
 .env
 
-# Run artefacts live outside the repo (see foxrepro.storage), but guard against
-# a stray FOX_RUNS_ROOT pointing here. Run JSONL is the irreplaceable artefact
-# of this project -- back it up deliberately, do not let git decide.
-runs/
-reports/
-logs/
+# The LIVE run directory is ephemeral working state; the committed archive is
+# results/runs/ and is tracked deliberately (see results/runs/README.md).
+#
+# Run JSONL is tracked despite looking large: 63% of every record is provenance
+# repeated identically on all 3000 lines, so git stores 7.7 MB of it in 0.34 MB
+# -- 23x. All 53 jobs come to roughly 9 MB, which buys a clone that already
+# contains every result, and git history as provenance for free.
+#
+# These are anchored with a leading slash on purpose. A bare `runs/` matches at
+# EVERY level, so it swallowed results/runs/ too -- and git never descends into
+# an excluded directory, which makes a later `!results/runs/*.jsonl` negation
+# silently useless.
+/runs/
+/reports/
+/logs/
 *.jsonl
+!results/runs/*.jsonl
 
 # COCO subset tar and extracted images: reconstructible, 150 MB+, never in git.
 *.tar

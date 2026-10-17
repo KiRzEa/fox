@@ -166,6 +166,7 @@ hyperparameters" despite Algorithm 1 taking it as an input.
 | | |
 |---|---|
 | A CHAIR evaluator | **The release has none.** `char_eval.py` only dumps captions; there is no `chair.py` and no synonym list. Table 2 is not reproducible from the release at all. |
+| A frozen CHAIR image list | The release globs `--data-path` for `*.jpg` and takes the first `--test-sample 500`, so which 500 images CHAIR scores depends on what happens to be in the directory. We ship an explicit list of 500 val2014 ids so the set is fixed and recorded. This is a deviation in *selection*, not in protocol: the paper does not state which 500 it used. |
 | Five intervention arms as flags | `off`, `as_described`, `ulp_control`, `noise_control` — the controls the paper never ran |
 | Three independent dtype axes | weights / pre-softmax logit storage / softmax accumulation. The mechanism lives in the second |
 | Resume | Keyed on the run file; tested by actually crashing the process |

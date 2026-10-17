@@ -360,6 +360,14 @@ image, and every metric downstream reports plausible numbers computed from
 noise. `load_llava` refuses the repo by name and, more generally, refuses any
 load that leaves parameters uninitialised.
 
+**The data step must not disagree with the run step.** `run_kaggle_fox.sh`
+fetches with `--what auto --session N`, which reads the frozen plan and pulls
+exactly the image sets that session's jobs need. The first real session
+hardcoded `--what pope` while session 1 also contained CHAIR jobs, and all
+four died within forty seconds on a missing image list. The CHAIR list now
+ships in `assets/` for the same reason: deriving it needs
+`instances_val2014.json`, distributed only inside a 241 MB zip.
+
 **Check `transformers_path` in the output.** On Track A, if stock HuggingFace is
 on `sys.path` instead of the vendored tree, the intervention silently does
 nothing while the run reports success. Every record carries the resolved path so

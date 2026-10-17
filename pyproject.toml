@@ -40,7 +40,7 @@ where = ["src"]
 # The CHAIR synonym list and the POPE annotations must travel with the
 # package: `storage.Paths.pkg_root` resolves them relative to the installed
 # module, not to the checkout, so an editable *or* a wheel install both work.
-foxrepro = ["assets/*.txt", "assets/pope/*.json", "assets/pope/*.md"]
+foxrepro = ["assets/*.txt", "assets/*.json", "assets/pope/*.json", "assets/pope/*.md"]
 
 [tool.pytest.ini_options]
 # The suite is stdlib unittest; pytest is optional and only used as a runner.

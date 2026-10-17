@@ -41,15 +41,19 @@ python3 scripts/probe_host.py || echo "[warn] probe reported problems; read them
 python3 - <<'PY'
 import sys
 from foxrepro.storage import paths, readiness_report
-rep = readiness_report(paths())
-c = rep["checks"]
+p = paths()
+c = readiness_report(p)["checks"]
 if not c["pope_files"]:
     sys.exit("POPE annotations missing from the package -- reinstall")
-if not c["n_local_images"]:
-    print("[setup] fetching the 500 POPE images (~78 MB)")
+if not p.chair_image_list.is_file():
+    sys.exit("the CHAIR image list is missing -- reinstall; it ships in assets/")
 PY
 
-python3 -m foxrepro.data.fetch_images --what pope --workers 8 --progress-every 100
+# --what auto reads the frozen plan and fetches exactly what THIS session's
+# jobs need. Hardcoding --what pope here is what made every CHAIR job in
+# session 1 die within seconds: the data step and the run step disagreed.
+python3 -m foxrepro.data.fetch_images --what auto --session "$N" \
+    --workers 8 --progress-every 100
 
 python3 -m foxrepro.bench.plan run --session "$N" --budget-hours "${BUDGET:-10}"
 RC=$?

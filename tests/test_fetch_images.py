@@ -118,3 +118,91 @@ class TestUrlShape(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestShippedChairList(unittest.TestCase):
+    """The CHAIR image list must travel with the package.
+
+    Deriving the 500 ids needs instances_val2014.json, which is distributed
+    only inside a 241 MB zip. Without a shipped list, every CHAIR job fails at
+    startup in a fresh session -- which is what happened on the first real
+    run, four jobs dead in forty seconds.
+    """
+
+    def test_the_list_is_shipped_and_resolvable(self) -> None:
+        from foxrepro.storage import paths
+
+        path = paths().chair_image_list
+        self.assertTrue(
+            path.is_file(),
+            f"{path} is missing; it must ship in assets/ so a fresh session "
+            f"needs no COCO download to run CHAIR",
+        )
+
+    def test_it_holds_exactly_500_distinct_ids(self) -> None:
+        import json as _json
+
+        from foxrepro.storage import paths
+
+        payload = _json.loads(paths().chair_image_list.read_text())
+        ids = payload["image_ids"] if isinstance(payload, dict) else payload
+        self.assertEqual(len(ids), 500)
+        self.assertEqual(len(set(ids)), 500)
+        self.assertTrue(all(isinstance(i, int) and i > 0 for i in ids))
+
+    def test_the_loader_accepts_it(self) -> None:
+        from foxrepro.data.loaders import load_chair
+        from foxrepro.storage import paths
+
+        samples = load_chair(
+            paths().chair_image_list, Path("/nonexistent"),
+            require_images=False,
+        )
+        self.assertEqual(len(samples), 500)
+        self.assertEqual(samples[0].benchmark, "chair")
+
+    def test_a_missing_list_explains_itself(self) -> None:
+        """A bare pathlib FileNotFoundError said nothing about the cause."""
+        from foxrepro.data.loaders import load_chair
+
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(FileNotFoundError) as ctx:
+                load_chair(Path(td) / "absent.json", Path(td),
+                           require_images=False)
+            msg = str(ctx.exception)
+            self.assertIn("assets/chair_images.json", msg)
+            self.assertIn("pip install -e .", msg)
+
+
+class TestSessionAwareFetch(unittest.TestCase):
+    """The data step and the run step must not be able to disagree.
+
+    Session 1 mixes POPE and CHAIR jobs; the bootstrap fetched only POPE, and
+    all four CHAIR jobs died within seconds. `--what auto` reads the frozen
+    plan instead of trusting a hardcoded flag.
+    """
+
+    def test_auto_reads_the_plan(self) -> None:
+        from foxrepro.data.fetch_images import _what_for_session
+        from foxrepro.storage import paths
+
+        plan = paths().repo_root / "scripts" / "run_plan.json"
+        if not plan.is_file():
+            self.skipTest("no frozen plan in this checkout")
+        self.assertIn(_what_for_session(1, plan), ("pope", "chair", "union"))
+
+    def test_session_one_needs_both_benchmarks(self) -> None:
+        from foxrepro.data.fetch_images import _what_for_session
+        from foxrepro.storage import paths
+
+        plan = paths().repo_root / "scripts" / "run_plan.json"
+        if not plan.is_file():
+            self.skipTest("no frozen plan in this checkout")
+        self.assertEqual(_what_for_session(1, plan), "union")
+
+    def test_an_unknown_session_fetches_everything(self) -> None:
+        """Guessing wrong costs a whole session; over-fetching costs 80 MB."""
+        from foxrepro.data.fetch_images import _what_for_session
+
+        self.assertEqual(_what_for_session(99, Path("/nonexistent")), "union")
+        self.assertEqual(_what_for_session(None, None), "union")

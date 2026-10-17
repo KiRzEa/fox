@@ -307,6 +307,18 @@ def load_chair(
         Samples sorted by ``image_id``.
     """
     path = Path(image_list_path)
+    if not path.is_file():
+        # A bare FileNotFoundError out of pathlib is what the first real
+        # session produced, four times in forty seconds, and it said nothing
+        # about which of several causes applied.
+        raise FileNotFoundError(
+            f"CHAIR image list not found at {path}.\n"
+            f"It ships with the package at assets/chair_images.json, so the "
+            f"usual cause is a stale install -- re-run `pip install -e .`.\n"
+            f"To regenerate it instead, build the COCO subset:\n"
+            f"    python -m foxrepro.data.build_coco_subset build "
+            f"--val2014-dir <dir> --annotations-dir <dir> --pope-dir <dir>"
+        )
     payload = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(payload, dict):
         entries = payload.get("image_ids") or payload.get("images")

@@ -121,6 +121,8 @@ def needed_image_ids(
                     pope_ids.add(name)
 
     chair_ids: Set[int] = set()
+    # p.chair_image_list falls back to the list shipped with the package,
+    # so CHAIR works in a fresh session with no COCO download.
     chair_list = chair_list or p.chair_image_list
     if chair_list and chair_list.is_file():
         data = json.loads(chair_list.read_text())
@@ -263,15 +265,53 @@ def fetch_annotations(dest_dir: Path, *, timeout: int = 600) -> Dict[str, object
     return {"status": "ok", "dest": str(dest_dir), "extracted": extracted}
 
 
+def _what_for_session(session: Optional[int], plan_path: Optional[Path]) -> str:
+    """Which image set a session needs, read from the frozen plan.
+
+    Session 1 of the reproducibility plan mixes POPE and CHAIR jobs, and
+    fetching only POPE made all four CHAIR jobs fail within seconds of
+    starting. Deciding from the plan rather than from a hardcoded flag is the
+    fix: the data step and the run step then cannot disagree.
+    """
+    if session is None:
+        return "union"
+    plan_path = plan_path or (paths().repo_root / "scripts" / "run_plan.json")
+    try:
+        plan = json.loads(Path(plan_path).read_text())
+        ids = plan["sessions"][session - 1]["jobs"]
+    except (OSError, KeyError, IndexError, json.JSONDecodeError):
+        # No plan, or a session that is not in it: fetch everything rather
+        # than guess, since a missing image set costs a whole session.
+        return "union"
+    benches = {plan["jobs"][j]["id"].split(":")[2] for j in ids}
+    if benches == {"pope"}:
+        return "pope"
+    if benches == {"chair"}:
+        return "chair"
+    return "union"
+
+
 def _main(argv: Optional[Sequence[str]] = None) -> int:
     p = paths()
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument(
-        "--what", choices=("pope", "chair", "union"), default="pope",
-        help="which image set to fetch. 'pope' (500 images, ~100 MB) is "
-             "enough for a full POPE run and needs no annotations.",
+        "--what", choices=("pope", "chair", "union", "auto"), default="auto",
+        help="which image set to fetch. 'pope' (500 images, ~78 MB) is enough "
+             "for a full POPE run and needs no annotations. 'chair' fetches "
+             "the 500 captioning images. 'auto' reads the frozen plan and "
+             "fetches exactly what the given --session needs, which is the "
+             "right default: fetching only POPE and then running a CHAIR job "
+             "fails at startup.",
+    )
+    ap.add_argument(
+        "--session", type=int, default=None,
+        help="with --what auto, the session whose jobs decide what to fetch",
+    )
+    ap.add_argument(
+        "--plan", type=Path, default=None,
+        help="frozen plan for --what auto (default scripts/run_plan.json)",
     )
     ap.add_argument("--dest", type=Path, default=p.coco_images_dir)
     ap.add_argument("--pope-dir", type=Path, default=p.pope_ann_dir)
@@ -290,10 +330,15 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     sets = needed_image_ids(args.pope_dir, args.chair_list)
-    ids = sorted(sets[args.what])
+
+    what = args.what
+    if what == "auto":
+        what = _what_for_session(args.session, args.plan)
+        print(f"[fetch] auto -> {what}")
+    ids = sorted(sets[what])
     if not ids:
         print(
-            f"[fetch] nothing to do: no {args.what} image ids found.\n"
+            f"[fetch] nothing to do: no {what} image ids found.\n"
             f"        POPE ids come from {args.pope_dir} (shipped in the "
             f"package).\n"
             f"        CHAIR ids come from {args.chair_list}, which "
@@ -304,7 +349,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     if args.limit:
         ids = ids[: args.limit]
 
-    print(f"[fetch] set={args.what}  ids={len(ids)}  dest={args.dest}")
+    print(f"[fetch] set={what}  ids={len(ids)}  dest={args.dest}")
     print(f"[fetch] pope={len(sets['pope'])} chair={len(sets['chair'])} "
           f"union={len(sets['union'])}")
     if args.dry_run:

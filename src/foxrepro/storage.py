@@ -330,8 +330,22 @@ class Paths:
 
     @property
     def chair_image_list(self) -> Path:
-        """Frozen list of the 500 CHAIR image ids, shipped inside the tar."""
-        return self.data_root / "chair_images.json"
+        """The 500 CHAIR image ids.
+
+        Prefers a copy under ``data_root`` (written by ``build_coco_subset``
+        when the full val2014 is available) and otherwise falls back to the
+        list shipped with the package.
+
+        Shipping it matters: deriving the ids needs ``instances_val2014.json``,
+        which is only distributed inside a 241 MB zip. Downloading that in
+        every Kaggle session to recover 500 integers would be absurd, and
+        without it the CHAIR jobs fail at startup -- which is exactly what
+        happened on the first real session.
+        """
+        local = self.data_root / "chair_images.json"
+        if local.is_file():
+            return local
+        return self.pkg_root / "assets" / "chair_images.json"
 
     @property
     def tmp_dir(self) -> Path:

@@ -55,6 +55,15 @@ PY
 python3 -m foxrepro.data.fetch_images --what auto --session "$N" \
     --workers 8 --progress-every 100
 
+# Kaggle gives a session no memory of the last one: /kaggle/working starts
+# empty, so resume would see no run files and redo work already paid for.
+# Attach previous sessions' result zips as a Dataset and they are picked up
+# here. Without this, re-running session 1 to finish its CHAIR jobs would
+# also redo its two POPE jobs -- 3.5 GPU-hours for nothing.
+if [ -d /kaggle/input ]; then
+  python3 -m foxrepro.bench.plan ingest /kaggle/input || true
+fi
+
 python3 -m foxrepro.bench.plan run --session "$N" --budget-hours "${BUDGET:-10}"
 RC=$?
 

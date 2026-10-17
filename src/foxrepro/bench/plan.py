@@ -426,7 +426,7 @@ def partition_jobs(n_sessions: int, jobs: Iterable[Job] = (),
 
 def ingest_runs(
     sources: Sequence[Path] = (), dest: Optional[Path] = None,
-    dry_run: bool = False,
+    dry_run: bool = False, inbox: Optional[Path] = None,
 ) -> Dict[str, object]:
     """Merge run files produced by independent sessions into one directory.
 
@@ -461,7 +461,9 @@ def ingest_runs(
     # With no sources, read the inbox: the conventional place to drop the zips
     # downloaded from each Kaggle session, so collecting five sessions is one
     # command rather than five unzips.
-    inbox = paths().repo_root / "runs_inbox"
+    # A parameter, not a constant: otherwise every test of this function
+    # depends on whatever happens to be sitting in the repo's inbox.
+    inbox = inbox or (paths().repo_root / "runs_inbox")
     sources = [Path(x) for x in sources] or ([inbox] if inbox.is_dir() else [])
     if not sources:
         return {
@@ -485,8 +487,11 @@ def ingest_runs(
                         z.extract(member, td.name)
             staged.append(Path(td.name))
         elif src.is_dir():
-            # A folder of zips, a folder of jsonl, or both.
-            zips = sorted(src.glob("*.zip"))
+            # A folder of zips, a folder of jsonl, or both. rglob rather than
+            # glob because /kaggle/input holds one SUBDIRECTORY per attached
+            # dataset, and that is how previous sessions' results come back
+            # into a fresh one.
+            zips = sorted(src.rglob("*.zip"))
             for zp in zips:
                 td = tempfile.TemporaryDirectory()
                 tmpdirs.append(td)

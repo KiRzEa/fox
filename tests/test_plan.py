@@ -444,6 +444,18 @@ class TestZipIngest(unittest.TestCase):
         self.assertEqual(rep["copied"], 3)
         self.assertEqual(len(list(self.dest.glob("*.jsonl"))), 3)
 
+    def test_zips_in_subdirectories_are_found(self) -> None:
+        """/kaggle/input holds one subdirectory per attached dataset, which is
+        how a previous session's results reach a fresh one."""
+        from foxrepro.bench.plan import ingest_runs
+
+        root = self.tmp / "kaggle_input"
+        (root / "fox-session-1").mkdir(parents=True)
+        self._session_zip(PLAN[0], 3, 1).replace(
+            root / "fox-session-1" / "s1.zip")
+        rep = ingest_runs([root], self.dest)
+        self.assertEqual(rep["copied"], 1)
+
     def test_a_folder_of_zips_works_too(self) -> None:
         """The actual workflow: download into one folder, ingest the folder."""
         from foxrepro.bench.plan import ingest_runs
@@ -476,7 +488,8 @@ class TestZipIngest(unittest.TestCase):
     def test_no_sources_and_no_inbox_is_not_an_error(self) -> None:
         from foxrepro.bench.plan import ingest_runs
 
-        rep = ingest_runs([], self.dest)
+        # An explicit empty inbox: the repo's own may hold real session zips.
+        rep = ingest_runs([], self.dest, inbox=self.tmp / "empty_inbox")
         self.assertEqual(rep["copied"], 0)
         self.assertIn("note", rep)
 

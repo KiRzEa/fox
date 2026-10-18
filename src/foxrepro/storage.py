@@ -134,6 +134,22 @@ INTERVENTION_MODES = (
     "ulp_control", "noise_control",
 )
 
+#: Prompt arms. The strings themselves live in ``bench.methods``, which cannot
+#: be imported here (it imports ``bench.generate``, which imports this module),
+#: so the *names* live here and ``methods`` asserts its dicts match. Keeping
+#: them in one place is not tidiness: ``GenConfig`` validates against this
+#: tuple and the run-file variant tag is built from it, so a name known to one
+#: module and not the other would either reject a valid run or let two
+#: different prompts share a file.
+#:
+#: ``llava_v1`` is the default -- it is what ``eval_configs/llava-1.5_eval.yaml``
+#: sets and ``llava.py:228`` concatenates. ``none`` and ``llava_v1_spaced`` are
+#: ablations.
+SYSTEM_PROMPT_IDS = ("llava_v1", "llava_v1_spaced", "none")
+
+#: Turn wrappers. ``released`` is the Fox repo's ``INSTRUCTION_TEMPLATE``.
+WRAPPER_IDS = ("released", "newline")
+
 #: Every provenance field a JSONL record must carry. ``generate.py`` asserts
 #: that each written record has exactly these keys, so a schema drift shows up
 #: at write time instead of at analysis time.
@@ -150,6 +166,7 @@ PROVENANCE_FIELDS: tuple[str, ...] = (
     # it is part of the method, not presentation. Omitting it leaves only
     # <s>/USER/: before the image and m_sys loses its subject entirely.
     "system_prompt_id",
+    "wrapper_id",
     "logit_dtype",      # pre-softmax attention logit storage -- the mechanism
     "softmax_dtype",    # softmax accumulation (HF hard-upcasts to fp32)
     "mode",             # which intervention arm; see INTERVENTION_MODES
@@ -185,7 +202,7 @@ VARIANT_FIELDS: tuple[str, ...] = (
     # the precision/arm axes. These MUST be here: the whole experiment is a
     # sweep over them at otherwise identical settings, so without them every
     # arm would resume from -- and overwrite -- the previous arm's file.
-    "logit_dtype", "softmax_dtype", "mode", "system_prompt_id",
+    "logit_dtype", "softmax_dtype", "mode", "system_prompt_id", "wrapper_id",
 )
 
 #: Default generation length per benchmark, matching the reference code:

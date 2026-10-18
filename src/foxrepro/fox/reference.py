@@ -37,6 +37,14 @@ Provenance of each transcription
 ``reference_span_visual_text`` / ``reference_metrics``
     ``Uncertain_head.py`` lines 4-128, whole file.
 
+``reference_prompt`` / ``reference_pope_predict``
+    The evaluation harness, not the method: ``pope_eval.py`` lines 59-64 and
+    232-242, ``char_eval.py`` lines 31-36 and 157,
+    ``eval_configs/llava-1.5_eval.yaml``, and
+    ``minigpt4/models/llava.py`` lines 228 and 344. They are transcribed here
+    for the same reason as the kernel -- the harness decides what the numbers
+    mean, and a paraphrase of it is a silent deviation.
+
 ``reference_fuse``
     ``vcd_sample.py`` lines 174-223.
 
@@ -460,3 +468,83 @@ def reference_fuse(
 
     cd_logits = diffs.masked_fill(next_token_logits < cutoff, -float("inf"))
     return diffs, cd_logits
+
+
+# --------------------------------------------------------------------------- #
+# the evaluation harness
+# --------------------------------------------------------------------------- #
+#: ``eval_configs/llava-1.5_eval.yaml``, the ``model.system_message`` value,
+#: transcribed. ``minigpt4/models/llava.py:344`` reads it as
+#: ``cfg.get("system_message", "")`` -- the model-level config in
+#: ``configs/models/llava-1.5_vicuna7b.yaml`` does not set the key, the eval
+#: config does, and the eval config wins the merge.
+RELEASED_SYSTEM_MESSAGE = (
+    "A chat between a curious user and an artificial intelligence assistant. "
+    "The assistant gives helpful, detailed, and polite answers to the user's "
+    "questions."
+)
+
+#: ``pope_eval.py:59-64`` and ``char_eval.py:31-36``, the ``llava-1.5`` entry.
+RELEASED_INSTRUCTION_TEMPLATE = "USER: <ImageHere> <question> ASSISTANT:"
+
+#: ``char_eval.py:157``. POPE substitutes the annotation's question verbatim.
+RELEASED_CHAIR_QUESTION = "Please describe this image in detail."
+
+#: ``pope_eval.py:402`` and ``char_eval.py:191``.
+RELEASED_POPE_MAX_NEW_TOKENS = 1
+RELEASED_CHAIR_MAX_NEW_TOKENS = 512
+
+#: ``pope_eval.py:233``.
+RELEASED_NEG_WORDS = ["No", "not", "no", "NO"]
+
+
+def reference_prompt(question: str,
+                     system_message: str = RELEASED_SYSTEM_MESSAGE) -> str:
+    """``pope_eval.py:367-368`` then ``llava.py:228``, in that order.
+
+    Two lines of released code::
+
+        qu = [template.replace("<question>", q) for q in qu]      # pope_eval
+        instruction = [self.system_message + p for p in instruction]  # llava
+
+    The second is a bare ``+``. There is no separator, and that is not an
+    oversight to be corrected here -- it is what produced the paper's numbers,
+    so the string it builds runs ``questions.USER:`` together.
+
+    Args:
+        question: the POPE question, or :data:`RELEASED_CHAIR_QUESTION`.
+        system_message: defaults to the released value; ``""`` is the ablation.
+
+    Returns:
+        The prompt with ``<ImageHere>`` still in place of the image token.
+    """
+    qu = RELEASED_INSTRUCTION_TEMPLATE.replace("<question>", question)
+    return system_message + qu
+
+
+def reference_pope_predict(out):
+    """``pope_eval.py:232-242``, ``recorder``, transcribed.
+
+    Note what it is not: there is no unparsable class, and no check that the
+    answer is an answer. Any generation without a negation token scores as a
+    positive -- ``""``, ``"There"`` and ``"Maybe"`` all become 1. Under the
+    released prompt and ``max_new_tokens = 1`` that is a load-bearing choice,
+    because the single generated token is frequently neither "Yes" nor "No".
+
+    Args:
+        out: iterable of generated strings.
+
+    Returns:
+        List of ``1`` (yes) / ``0`` (no), one per string.
+    """
+    NEG_WORDS = ["No", "not", "no", "NO"]
+    pred_list = []
+    for line in out:
+        line = line.replace('.', '')
+        line = line.replace(',', '')
+        words = line.split(' ')
+        if any(word in NEG_WORDS for word in words) or any(word.endswith("n't") for word in words):
+            pred_list.append(0)
+        else:
+            pred_list.append(1)
+    return pred_list

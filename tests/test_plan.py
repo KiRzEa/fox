@@ -23,6 +23,9 @@ from foxrepro.bench.plan import (
 )
 from foxrepro.storage import MAX_NEW_TOKENS_DEFAULT
 
+#: tests/ sits next to the repo root, where run_kaggle_fox.sh lives.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 def cfg_from_command(cmd: str) -> GenConfig:
     """Rebuild a GenConfig from a plan command, the way the CLI would."""
@@ -48,10 +51,14 @@ def cfg_from_command(cmd: str) -> GenConfig:
         method=str(args["method"]), benchmark=str(bench), split=str(args["split"]),
         seed=int(str(args["seed"])), dtype=str(args["dtype"]),
         model_id=str(args["model_id"]),
-        prompt_template_id="pope_v1" if bench == "pope" else "chair_v1",
+        prompt_template_id=str(
+            args.get("prompt_template_id")
+            or ("pope_v0_raw" if bench == "pope" else "chair_v1")
+        ),
         max_new_tokens=MAX_NEW_TOKENS_DEFAULT[str(bench)],
         decoding=str(args["decoding"]),
         system_prompt_id=str(args["system_prompt"]),
+        wrapper_id=str(args.get("wrapper") or "released"),
         mode=str(args.get("mode") or "as_implemented") if is_fox else "as_implemented",
         logit_dtype=str(args.get("logit_dtype") or "native") if is_fox else "native",
         gamma=float(str(args["gamma"])) if "gamma" in args else None,
@@ -495,23 +502,52 @@ class TestZipIngest(unittest.TestCase):
 
 
 class TestSessionBudget(unittest.TestCase):
-    def test_nine_sessions_fit_a_ten_hour_cap(self) -> None:
-        """87 GPU-h at 10 h per session needs 9, not the 5 planned earlier."""
+    """The plan has to be cuttable into shards that each fit a Kaggle session.
+
+    The number of shards is not pinned here: it moves whenever a job is added
+    or an estimate is recalibrated. What is pinned is the property the runner
+    depends on -- that *some* split fits under the 10 h wall, and that the
+    split one shard smaller does not, so the number in the docs is the
+    smallest one that works rather than an arbitrary round figure.
+    """
+
+    WALL_HOURS = 10.0
+
+    @staticmethod
+    def _loads(n: int) -> list:
         from foxrepro.bench.plan import partition_jobs
 
-        loads = [
-            sum(j.est_seconds() for j in g) / 3600 for g in partition_jobs(9)
+        return [
+            sum(j.est_seconds() for j in g) / 3600 for g in partition_jobs(n)
         ]
-        self.assertLessEqual(max(loads), 10.5)
-        self.assertGreater(min(loads), 8.5)
 
-    def test_five_sessions_would_not_fit(self) -> None:
-        from foxrepro.bench.plan import partition_jobs
+    def _smallest_fitting(self) -> int:
+        for n in range(1, 61):
+            if max(self._loads(n)) <= self.WALL_HOURS:
+                return n
+        self.fail("no split of the plan fits a 10 h session")
 
-        loads = [
-            sum(j.est_seconds() for j in g) / 3600 for g in partition_jobs(5)
-        ]
-        self.assertGreater(min(loads), 10.0)
+    def test_a_split_fits_the_ten_hour_cap(self) -> None:
+        n = self._smallest_fitting()
+        loads = self._loads(n)
+        self.assertLessEqual(max(loads), self.WALL_HOURS)
+        # No shard may be near-empty either: that would mean the partitioner
+        # is dumping everything into one session and padding with the rest.
+        self.assertGreater(min(loads), 0.5 * max(loads))
+
+    def test_one_session_fewer_does_not_fit(self) -> None:
+        n = self._smallest_fitting()
+        self.assertGreater(max(self._loads(n - 1)), self.WALL_HOURS)
+
+    def test_the_runner_default_matches_the_plan(self) -> None:
+        """``run_kaggle_fox.sh`` documents a session count; keep it honest."""
+        import re
+
+        script = (REPO_ROOT / "run_kaggle_fox.sh").read_text()
+        m = re.search(r"--sessions (\d+)", script)
+        self.assertIsNotNone(m, "run_kaggle_fox.sh no longer documents --sessions")
+        documented = int(m.group(1))  # type: ignore[union-attr]
+        self.assertLessEqual(max(self._loads(documented)), self.WALL_HOURS)
 
     def test_watchdog_fires_inside_the_budget(self) -> None:
         """A fixed 11.3 h deadline never fires in a 10 h session."""

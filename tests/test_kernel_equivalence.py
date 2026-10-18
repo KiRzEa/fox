@@ -403,3 +403,89 @@ class TestBoostVisual(unittest.TestCase):
         from foxrepro.storage import INTERVENTION_MODES
 
         self.assertIn("boost_visual", INTERVENTION_MODES)
+
+
+class TestHarnessMatchesTheReleasedHarness(unittest.TestCase):
+    """The harness decides what the numbers mean, so it gets the same
+    treatment as the kernel: a verbatim transcription in ``reference.py``,
+    and the port asserted equal to it.
+
+    Without this, a "tidy-up" that inserts the missing space after
+    ``questions.`` or that rejects an unparseable POPE answer instead of
+    scoring it positive would change every table and pass every other test.
+    """
+
+    QUESTIONS = (
+        "Is there a dog in the image?",
+        "Is there a snowboard in the image?",
+        "Please describe this image in detail.",
+    )
+
+    def test_the_prompt_is_byte_identical_to_the_release(self) -> None:
+        from foxrepro.bench.methods import render_full_prompt
+        from foxrepro.fox.reference import reference_prompt
+
+        for q in self.QUESTIONS:
+            with self.subTest(q=q):
+                # The only intended difference: the converted checkpoint's
+                # processor takes "<image>" where the released code wrote its
+                # own placeholder and spliced embeddings by hand.
+                expected = reference_prompt(q).replace("<ImageHere>", "<image>")
+                self.assertEqual(render_full_prompt(q), expected)
+
+    def test_the_no_system_arm_matches_an_empty_system_message(self) -> None:
+        from foxrepro.bench.methods import render_full_prompt
+        from foxrepro.fox.reference import reference_prompt
+
+        for q in self.QUESTIONS:
+            with self.subTest(q=q):
+                expected = reference_prompt(q, system_message="").replace(
+                    "<ImageHere>", "<image>")
+                self.assertEqual(render_full_prompt(q, "none"), expected)
+
+    def test_the_released_pope_parser_agrees_on_every_shape_of_answer(self) -> None:
+        from foxrepro.bench.evaluate import parse_yes_no_released
+        from foxrepro.fox.reference import reference_pope_predict
+
+        answers = [
+            "Yes", "No", "yes", "no", "NO", "YES", "",
+            "Yes.", "No,", "Yes, there is a dog.",
+            "There is a dog in the image.",
+            "There isn't a dog.", "It doesn't appear so.",
+            "Maybe", "I cannot tell", "Not sure",
+            "The", "A", "1", "   ", "\n",
+            "nobody", "nothing", "none",          # substrings, not tokens
+            "Yes No", "No Yes",
+        ]
+        released = reference_pope_predict(answers)
+        ours = [1 if parse_yes_no_released(a) == "yes" else 0 for a in answers]
+        for a, r, o in zip(answers, released, ours):
+            self.assertEqual(r, o, f"disagreement on {a!r}: release={r} ours={o}")
+
+    def test_the_released_parser_never_abstains(self) -> None:
+        """Unlike the strict parser, which is the point of keeping both."""
+        from foxrepro.bench.evaluate import parse_yes_no, parse_yes_no_released
+
+        self.assertIsNone(parse_yes_no("Maybe"))
+        self.assertEqual(parse_yes_no_released("Maybe"), "yes")
+
+    def test_max_new_tokens_match_the_release(self) -> None:
+        from foxrepro.bench.plan import PLAN
+        from foxrepro.fox.reference import (
+            RELEASED_CHAIR_MAX_NEW_TOKENS, RELEASED_POPE_MAX_NEW_TOKENS,
+        )
+
+        want = {"pope": RELEASED_POPE_MAX_NEW_TOKENS,
+                "chair": RELEASED_CHAIR_MAX_NEW_TOKENS}
+        for job in PLAN:
+            with self.subTest(job=job.job_id()):
+                self.assertEqual(
+                    job.run_key().variant_fields["max_new_tokens"],
+                    want[job.benchmark],
+                )
+
+    def test_the_chair_question_is_the_released_one(self) -> None:
+        from foxrepro.data.loaders import PROMPT_TEMPLATES
+        from foxrepro.fox.reference import RELEASED_CHAIR_QUESTION
+
+        self.assertEqual(PROMPT_TEMPLATES["chair_v1"], RELEASED_CHAIR_QUESTION)

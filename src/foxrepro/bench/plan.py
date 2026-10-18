@@ -124,6 +124,8 @@ class Job:
     decoding: str = "sampling"
     mode: str = "as_implemented"
     system_prompt_id: str = "llava_v1"
+    wrapper_id: str = "released"
+    prompt_template_id: Optional[str] = None   # None -> faithful default
     logit_dtype: str = "native"
     gamma: Optional[float] = None
     k: Optional[float] = None
@@ -132,6 +134,17 @@ class Job:
     seed: int = 42
     limit: Optional[int] = None
     note: str = ""
+
+    def template_id(self) -> str:
+        """The faithful default unless the job overrides it.
+
+        ``pope_v0_raw`` sends the POPE question verbatim, which is what the
+        release does; ``pope_v1`` appends the "single word or phrase"
+        instruction and is an ablation.
+        """
+        if self.prompt_template_id:
+            return self.prompt_template_id
+        return "pope_v0_raw" if self.benchmark == "pope" else "chair_v1"
 
     def job_id(self) -> str:
         """Stable, readable identifier used in the frozen plan and the
@@ -146,6 +159,10 @@ class Job:
             bits.append(f"ld{self.logit_dtype}")
         if self.system_prompt_id != "llava_v1":
             bits.append(f"sp{self.system_prompt_id}")
+        if self.wrapper_id != "released":
+            bits.append(f"w{self.wrapper_id}")
+        if self.prompt_template_id:
+            bits.append(self.prompt_template_id)
         for nm, v in (("g", self.gamma), ("k", self.k),
                       ("t", self.tau_js), ("a", self.alpha)):
             if v is not None:
@@ -176,14 +193,13 @@ class Job:
             "gamma": self.gamma, "k": self.k, "tau_js": self.tau_js,
             "alpha": self.alpha, "beta": None,
             "max_new_tokens": 1 if self.benchmark == "pope" else 512,
-            "prompt_template_id": (
-                "pope_v1" if self.benchmark == "pope" else "chair_v1"
-            ),
+            "prompt_template_id": self.template_id(),
             "model_id": "llava-hf/llava-1.5-7b-hf",
             "decoding": self.decoding, "top_p": 0.9, "temperature": 1.0,
             "intervention_layers": None,
             "logit_dtype": self.logit_dtype, "softmax_dtype": "fp32",
             "mode": self.mode, "system_prompt_id": self.system_prompt_id,
+            "wrapper_id": self.wrapper_id,
         }
         return RunKey(
             method=self.method, benchmark=self.benchmark, split=self.split,
@@ -201,6 +217,8 @@ class Job:
             f"--seed {self.seed}",
             f"--decoding {self.decoding}",
             f"--system-prompt {self.system_prompt_id}",
+            f"--wrapper {self.wrapper_id}",
+            f"--prompt-template-id {self.template_id()}",
         ]
         if self.method == "fox":
             parts.append(f"--mode {self.mode}")
@@ -280,6 +298,18 @@ def _build_plan() -> List[Job]:
         jobs.append(Job("system_prompt", method, "pope", "adversarial",
                         system_prompt_id="none",
                         note="tests the X_sys anchor claim directly"))
+
+    # --- Prompt ablation: the ways session 1's prompt differed from the
+    # release. It ran with all of them present at once, which measured their
+    # sum (POPE-adversarial baseline 81.90 against the paper's 76.77). These
+    # isolate each one against the faithful baseline.
+    for label, over in (
+        ("newline", {"wrapper_id": "newline"}),
+        ("single_word", {"prompt_template_id": "pope_v1"}),
+        ("spaced_sysprompt", {"system_prompt_id": "llava_v1_spaced"}),
+    ):
+        jobs.append(Job("prompt_ablation", "sampling", "pope", "adversarial",
+                        note=f"faithful + {label}", **over))
 
     # --- Table 7: alpha ablation ------------------------------------------- #
     for alpha in (1.0, 3.0, 4.0):   # 2.0 is the default, already covered

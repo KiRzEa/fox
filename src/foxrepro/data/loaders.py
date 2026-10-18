@@ -47,11 +47,19 @@ __all__ = [
 # --------------------------------------------------------------------------- #
 #: ``prompt_template_id -> template``. ``{question}`` is substituted for POPE.
 #:
-#: ``pope_v1`` is the standard LLaVA-1.5 POPE instruction used by the VCD /
-#: SID / OPERA code releases; the Fox paper does not print its POPE prompt, so
-#: this is a reproduction decision and is recorded per sample.
-#: ``chair_v1`` likewise follows the prompt those releases use for the CHAIR
-#: captioning task. The paper only states max 512 new tokens.
+#: ``pope_v0_raw`` sends the POPE question verbatim, which is what the Fox
+#: release does: ``pope_eval.py`` substitutes the question straight into
+#: ``"USER: <ImageHere> <question> ASSISTANT:"`` with no added instruction.
+#: It is therefore the faithful default.
+#:
+#: ``pope_v1`` appends the standard LLaVA "answer in a single word or
+#: phrase" instruction used by the VCD / SID / OPERA releases. That phrasing
+#: is known to raise POPE accuracy by keeping answers parseable, so it is
+#: kept as an ablation rather than deleted -- it is one of the prompt
+#: differences being measured.
+#:
+#: ``chair_v1`` is ``char_eval.py:157`` verbatim, asserted against
+#: ``reference.RELEASED_CHAIR_QUESTION``. ``chair_v2_short`` is an ablation.
 PROMPT_TEMPLATES: Dict[str, str] = {
     "pope_v1": "{question}\nAnswer the question using a single word or phrase.",
     "pope_v0_raw": "{question}",

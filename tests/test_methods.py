@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover
 
 from foxrepro.bench.generate import GenConfig, get_method  # noqa: E402
 from foxrepro.bench.methods import (  # noqa: E402
-    FOX_DEFAULTS, LLAVA_V1_5_WRAPPER, parse_layer_window, render_full_prompt,
+    FOX_DEFAULTS, LLAVA_WRAPPERS, parse_layer_window, render_full_prompt,
 )
 from foxrepro.data.loaders import Sample  # noqa: E402
 
@@ -171,7 +171,11 @@ class _Base(unittest.TestCase):
             # are actually exercised rather than bypassed.
             return inner_self.processor(
                 images=None,
-                text=render_full_prompt(prompt, inner_self._system_prompt_id()),
+                text=render_full_prompt(
+                    prompt,
+                    inner_self._system_prompt_id(),
+                    inner_self._wrapper_id(),
+                ),
                 return_tensors="pt",
             )
 
@@ -220,7 +224,7 @@ class TestPromptWrapper(_Base):
         """The turn structure, independent of which system prompt precedes it."""
         self.run_method("sampling")
         text = self.processor.seen_text[0]
-        self.assertIn("USER: <image>\n", text)
+        self.assertIn("USER: <image>", text)
         self.assertTrue(text.rstrip().endswith("ASSISTANT:"))
         self.assertIn("Is there a dog in the image?", text)
         # the image marker must come after the system prompt, not before it
@@ -228,7 +232,9 @@ class TestPromptWrapper(_Base):
 
     def test_wrapper_is_recorded_in_provenance(self) -> None:
         m, _ = self.run_method("sampling")
-        self.assertEqual(m.describe()["wrapper"], LLAVA_V1_5_WRAPPER)
+        self.assertEqual(
+            m.describe()["wrapper"], LLAVA_WRAPPERS["released"]
+        )
 
 
 class TestFoxHyperparameters(_Base):
@@ -366,29 +372,62 @@ class TestSystemPrompt(_Base):
     mass on the keys *before* the image. The paper calls those keys "the
     primary anchor for latent priors" and the origin of the shortcut it claims
     to sever. Omitting the system prompt leaves only ``<s>``, ``USER`` and
-    ``:`` there -- measured on the first real run, an image span starting at
-    index 5 instead of ~40 -- so m_sys loses its subject and the causal story
-    loses its premise.
+    ``:`` there -- an image span starting at index 5 instead of ~40 -- so
+    m_sys loses its subject and the causal story loses its premise.
 
-    Both arms are kept because comparing them tests that premise directly, and
-    nobody has run that comparison.
+    The released code does send one, but not where a reader looks first:
+    ``pope_eval.py`` never touches ``conv_templates``, and the string arrives
+    instead from ``eval_configs/llava-1.5_eval.yaml`` via
+    ``llava.py:344`` -> ``llava.py:228``. ``none`` is kept as the ablation.
     """
 
-    def test_default_includes_the_llava_system_prompt(self) -> None:
+    RELEASED_SYSTEM = (
+        "A chat between a curious user and an artificial intelligence "
+        "assistant. The assistant gives helpful, detailed, and polite answers "
+        "to the user's questions."
+    )
+
+    def test_default_reproduces_the_released_concatenation_verbatim(self) -> None:
+        """``llava.py:228`` is a bare ``+``, so there is NO separator.
+
+        ``system_message + "USER: <ImageHere> <question> ASSISTANT:"`` runs the
+        period straight into ``USER``. That string, not a tidied-up version of
+        it, is what produced the paper's numbers, so it is what the default
+        has to render. The missing space is asserted explicitly because it is
+        the kind of detail a later cleanup would silently "fix".
+        """
         self.run_method("sampling")
         text = self.processor.seen_text[0]
-        self.assertTrue(text.startswith("A chat between a curious user"))
-        self.assertIn("USER: <image>\n", text)
-        self.assertTrue(text.rstrip().endswith("ASSISTANT:"))
+        expected = (
+            self.RELEASED_SYSTEM
+            + "USER: <image> Is there a dog in the image? ASSISTANT:"
+        )
+        self.assertEqual(text, expected)
+        self.assertIn("questions.USER:", text)
+        self.assertNotIn("questions. USER:", text)
 
-    def test_none_arm_omits_it(self) -> None:
+    def test_the_spaced_arm_differs_by_exactly_one_character(self) -> None:
+        self.run_method("sampling", system_prompt_id="llava_v1_spaced")
+        text = self.processor.seen_text[0]
+        self.assertIn("questions. USER:", text)
+        self.assertEqual(len(text), len(self.RELEASED_SYSTEM) + 1 + len(
+            "USER: <image> Is there a dog in the image? ASSISTANT:"))
+
+    def test_the_no_system_arm_leaves_the_released_turn_alone(self) -> None:
+        """`pope_eval.py:64`: "USER: <ImageHere> <question> ASSISTANT:"."""
         self.run_method("sampling", system_prompt_id="none")
         text = self.processor.seen_text[0]
-        self.assertTrue(text.startswith("USER: <image>\n"))
+        self.assertTrue(text.startswith("USER: <image> "), text[:40])
         self.assertNotIn("curious user", text)
+        self.assertNotIn("<image>\n", text)
+        self.assertTrue(text.rstrip().endswith("ASSISTANT:"))
+
+    def test_the_newline_wrapper_arm_changes_the_separator(self) -> None:
+        self.run_method("sampling", wrapper_id="newline")
+        self.assertIn("<image>\n", self.processor.seen_text[0])
 
     def test_both_are_recorded_in_provenance(self) -> None:
-        for sid in ("llava_v1", "none"):
+        for sid in ("none", "llava_v1", "llava_v1_spaced"):
             with self.subTest(sid=sid):
                 m, _ = self.run_method("sampling", system_prompt_id=sid)
                 d = m.describe()

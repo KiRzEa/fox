@@ -67,7 +67,8 @@ from foxrepro.data.loaders import (  # noqa: E402
 )
 from foxrepro.storage import (  # noqa: E402
     BENCHMARK_SPLITS, DTYPES, INTERVENTION_MODES, LOGIT_DTYPES,
-    MAX_NEW_TOKENS_DEFAULT, PROVENANCE_FIELDS, SOFTMAX_DTYPES, VARIANT_FIELDS,
+    MAX_NEW_TOKENS_DEFAULT, PROVENANCE_FIELDS, SOFTMAX_DTYPES,
+    SYSTEM_PROMPT_IDS, VARIANT_FIELDS, WRAPPER_IDS,
     RunKey, git_commit_hash, paths,
 )
 
@@ -125,6 +126,9 @@ class GenConfig:
     #: GenConfig attributes, and two values that change the output MUST NOT
     #: share a file -- resume would otherwise merge them silently.
     system_prompt_id: str = "llava_v1"
+    #: Conversation wrapper. "released" is verbatim from the Fox repo's
+    #: INSTRUCTION_TEMPLATE; "newline" uses the HF chat separator.
+    wrapper_id: str = "released"
     logit_dtype: str = "native"     # "native" == same as ``dtype``
     softmax_dtype: str = "fp32"     # what every HF version actually does
     mode: str = "as_implemented"    # see storage.INTERVENTION_MODES
@@ -149,10 +153,12 @@ class GenConfig:
             raise ValueError(f"softmax_dtype must be one of {SOFTMAX_DTYPES}")
         if self.mode not in INTERVENTION_MODES:
             raise ValueError(f"mode must be one of {INTERVENTION_MODES}")
-        if self.system_prompt_id not in ("llava_v1", "none"):
+        if self.system_prompt_id not in SYSTEM_PROMPT_IDS:
             raise ValueError(
-                "system_prompt_id must be 'llava_v1' or 'none'"
+                f"system_prompt_id must be one of {SYSTEM_PROMPT_IDS}"
             )
+        if self.wrapper_id not in WRAPPER_IDS:
+            raise ValueError(f"wrapper_id must be one of {WRAPPER_IDS}")
         if self.benchmark not in BENCHMARK_SPLITS:
             raise ValueError(f"unknown benchmark {self.benchmark!r}")
         if self.split not in BENCHMARK_SPLITS[self.benchmark]:
@@ -194,6 +200,7 @@ class GenConfig:
             "softmax_dtype": self.softmax_dtype,
             "mode": self.mode,
             "system_prompt_id": self.system_prompt_id,
+            "wrapper_id": self.wrapper_id,
             "device_map": self.device_map,
             **host_fingerprint(),
         }
@@ -925,13 +932,23 @@ def build_parser() -> argparse.ArgumentParser:
              "noise_control (matched-magnitude uniform noise).",
     )
     ap.add_argument(
-        "--system-prompt", choices=("llava_v1", "none"), default="llava_v1",
-        help="llava_v1 is the conv_vicuna_v1 system string the released "
-             "Fox/VCD code sends (~35 tokens, pushing the image span from "
-             "index ~5 to ~40). 'none' omits it, which directly tests the "
-             "paper's claim that the shortcut is anchored in the system "
-             "prompt: with none, m_sys measures attention over <s>/USER/: "
-             "and nothing semantic. If Fox still gains, that story fails.",
+        "--system-prompt", choices=SYSTEM_PROMPT_IDS, default="llava_v1",
+        help="llava_v1 (default) is what eval_configs/llava-1.5_eval.yaml "
+             "sets and llava.py:228 concatenates onto the turn -- with no "
+             "separator, so the prompt reads '...questions.USER:'. ~35 tokens, "
+             "pushing the image span from index ~5 to ~40. "
+             "llava_v1_spaced adds the missing space, to measure whether that "
+             "one character matters. 'none' omits the system prompt, which "
+             "directly tests the paper's claim that the shortcut is anchored "
+             "there: with none, m_sys measures attention over <s>/USER/: and "
+             "nothing semantic. If Fox still gains, that story fails.",
+    )
+    ap.add_argument(
+        "--wrapper", choices=("released", "newline"), default="released",
+        help="conversation wrapper. 'released' is verbatim from the Fox "
+             "repo's INSTRUCTION_TEMPLATE -- a SPACE between the image "
+             "and the question, no system prompt. 'newline' uses the HF "
+             "chat separator and is kept as an ablation.",
     )
     ap.add_argument(
         "--device-map", default="auto",
@@ -980,6 +997,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         logit_dtype=args.logit_dtype, softmax_dtype=args.softmax_dtype,
         mode=args.mode, device_map=args.device_map,
         system_prompt_id=args.system_prompt,
+        wrapper_id=args.wrapper,
     )
     # Must happen before any model is loaded: cudnn.allow_tf32 defaults to
     # True, and on Ampere+ a TF32 matmul has ~10 mantissa bits, which would

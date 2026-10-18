@@ -53,7 +53,7 @@ def _record(sample_id: str, label: str, output: str, **over: Any) -> Dict[str, A
         "intervention_layers": None,
         # precision axes of the central experiment
         "logit_dtype": "native", "softmax_dtype": "fp32", "mode": "off",
-        "system_prompt_id": "llava_v1",
+        "system_prompt_id": "none", "wrapper_id": "released",
         # host / sharding fingerprint
         "device_map": "auto", "n_gpus": 0, "gpu_name": None, "tf32_flags": None,
         "torch_version": None, "transformers_version": None,
@@ -138,16 +138,53 @@ class TestPopeArithmetic(unittest.TestCase):
         self.assertEqual(met["f1"]["point"], 0.0)
 
     def test_unparsed_policies(self) -> None:
+        """Only the strict parser has an unparsable class to have a policy for."""
         records = self.records + [_record("q10", "yes", "I cannot tell")]
-        negative, _ = evaluate_pope(records, unparsed_policy="negative", n_boot=200)
+        kw = dict(pope_parser="strict", n_boot=200)
+        negative, _ = evaluate_pope(records, unparsed_policy="negative", **kw)
         self.assertEqual(negative["n_unparsed"], 1)
         self.assertEqual(negative["n_samples"], 11)
         self.assertEqual(negative["confusion"]["fn"], 3)  # counted as "no"
 
-        excluded, _ = evaluate_pope(records, unparsed_policy="exclude", n_boot=200)
+        excluded, _ = evaluate_pope(records, unparsed_policy="exclude", **kw)
         self.assertEqual(excluded["n_unparsed"], 1)
         self.assertEqual(excluded["n_samples"], 10)
         self.assertAlmostEqual(excluded["accuracy"]["point"], 0.60, places=12)
+
+    def test_the_released_parser_scores_a_non_answer_as_yes(self) -> None:
+        """``pope_eval.py`` has no unparsable class, and that moves accuracy.
+
+        The released rule only looks for a negation token, so "I cannot tell"
+        on a "yes" sample is a true positive there and a false negative under
+        the strict parser. With the released prompt (no "single word or
+        phrase" suffix) and ``max_new_tokens = 1``, answers like this are the
+        norm, not the exception, so the two rules do not give the same table.
+        """
+        records = self.records + [_record("q10", "yes", "I cannot tell")]
+        rel, _ = evaluate_pope(records, pope_parser="released", n_boot=200)
+        self.assertEqual(rel["n_unparsed"], 0)
+        self.assertEqual(rel["n_samples"], 11)
+        self.assertEqual(rel["confusion"]["tp"], 4)      # q10 counted yes
+
+        strict, _ = evaluate_pope(records, pope_parser="strict", n_boot=200)
+        self.assertEqual(strict["confusion"]["tp"], 3)   # q10 counted no
+        self.assertEqual(strict["confusion"]["fn"], 3)
+        self.assertGreater(rel["accuracy"]["point"], strict["accuracy"]["point"])
+
+    def test_the_parser_choice_is_recorded(self) -> None:
+        for name in ("released", "strict"):
+            with self.subTest(name=name):
+                met, _ = evaluate_pope(self.records, pope_parser=name, n_boot=200)
+                self.assertEqual(met["pope_parser"], name)
+
+    def test_an_unknown_parser_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            evaluate_pope(self.records, pope_parser="lenient", n_boot=200)
+
+    def test_the_default_parser_is_the_released_one(self) -> None:
+        """The default has to be the rule that produced the paper's numbers."""
+        met, _ = evaluate_pope(self.records, n_boot=200)
+        self.assertEqual(met["pope_parser"], "released")
 
     def test_label_disagreement_raises(self) -> None:
         labels = {r["sample_id"]: "no" for r in self.records}

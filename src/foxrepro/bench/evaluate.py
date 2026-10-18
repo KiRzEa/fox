@@ -56,7 +56,8 @@ from foxrepro.bench.stats import (  # noqa: E402
 from foxrepro.storage import PROVENANCE_FIELDS, VARIANT_FIELDS, paths  # noqa: E402
 
 __all__ = [
-    "parse_yes_no", "read_run", "evaluate_pope", "evaluate_chair",
+    "parse_yes_no", "parse_yes_no_released", "POPE_PARSERS",
+    "DEFAULT_POPE_PARSER", "read_run", "evaluate_pope", "evaluate_chair",
     "evaluate_run_file", "PopeOutcome",
 ]
 
@@ -93,6 +94,51 @@ def parse_yes_no(text: str) -> Optional[str]:
         if w in ("yes", "no"):
             return w
     return None
+
+
+#: ``pope_eval.py:233``, verbatim. The released scorer has no unparsable
+#: class: it looks for a negation token anywhere in the answer and calls
+#: everything else "yes".
+RELEASED_NEG_WORDS = ("No", "not", "no", "NO")
+
+
+def parse_yes_no_released(text: str) -> str:
+    """The released POPE rule (``pope_eval.py:232-242``), transcribed.
+
+    Not a cleaned-up version of :func:`parse_yes_no`: a different function.
+    The release strips ``.`` and ``,``, splits on a single space, and answers
+    "no" if any token is in ``RELEASED_NEG_WORDS`` or ends in ``n't``. Every
+    other answer -- including ``""``, ``"There"`` and ``"Maybe"`` -- is "yes".
+
+    With ``max_new_tokens = 1`` and the "single word or phrase" suffix the two
+    parsers agree on every sample (measured: 3000/3000 on both session-1 POPE
+    runs). Without that suffix the first token is often neither "Yes" nor
+    "No", and then they diverge: the release scores such an answer as a
+    positive, this module's strict parser calls it unparsable. Since the
+    paper's numbers came out of the released rule, that rule is the default.
+
+    Args:
+        text: raw model output.
+
+    Returns:
+        ``"yes"`` or ``"no"`` -- never ``None``.
+    """
+    line = (text or "").replace(".", "").replace(",", "")
+    words = line.split(" ")
+    if any(w in RELEASED_NEG_WORDS for w in words):
+        return "no"
+    if any(w.endswith("n't") for w in words):
+        return "no"
+    return "yes"
+
+
+#: ``--pope-parser``. ``released`` reproduces the paper; ``strict`` is this
+#: module's own rule, which reports unparsable answers instead of scoring them.
+POPE_PARSERS = {
+    "released": parse_yes_no_released,
+    "strict": parse_yes_no,
+}
+DEFAULT_POPE_PARSER = "released"
 
 
 # --------------------------------------------------------------------------- #
@@ -210,6 +256,7 @@ def evaluate_pope(
     confidence: float = 0.95,
     n_boot: int = 10000,
     seed: int = 20260101,
+    pope_parser: str = DEFAULT_POPE_PARSER,
 ) -> Tuple[Dict[str, Any], List[PopeOutcome]]:
     """Compute POPE metrics.
 
@@ -222,7 +269,12 @@ def evaluate_pope(
         unparsed_policy: ``"negative"`` treats an unparsable answer as "no"
             (what the common POPE scripts do, since they test ``"no" in
             text``); ``"exclude"`` drops it from every denominator. Either way
-            the count is reported.
+            the count is reported. Irrelevant under the ``released`` parser,
+            which never returns ``None``.
+        pope_parser: ``"released"`` (default, :func:`parse_yes_no_released`)
+            or ``"strict"`` (:func:`parse_yes_no`). Recorded in the metrics,
+            because the two rules can disagree and a number is meaningless
+            without knowing which produced it.
         confidence: interval coverage.
         n_boot: bootstrap replicates for the F1 interval.
         seed: bootstrap seed.
@@ -232,6 +284,12 @@ def evaluate_pope(
     """
     if unparsed_policy not in ("negative", "exclude"):
         raise ValueError("unparsed_policy must be 'negative' or 'exclude'")
+    try:
+        parse = POPE_PARSERS[pope_parser]
+    except KeyError:
+        raise ValueError(
+            f"unknown pope_parser {pope_parser!r}; known: {sorted(POPE_PARSERS)}"
+        ) from None
 
     outcomes: List[PopeOutcome] = []
     n_unparsed = 0
@@ -253,7 +311,7 @@ def evaluate_pope(
                 f"{sid}: no usable ground-truth label (got {label!r}). Pass "
                 "--pope-dir so labels can be joined from the annotation file."
             )
-        pred = parse_yes_no(rec.get("output", ""))
+        pred = parse(rec.get("output", ""))
         if pred is None:
             n_unparsed += 1
             if unparsed_policy == "exclude":
@@ -298,6 +356,7 @@ def evaluate_pope(
         "n_samples": n,
         "n_unparsed": n_unparsed,
         "unparsed_policy": unparsed_policy,
+        "pope_parser": pope_parser,
         "confusion": {"tp": tp, "fp": fp, "fn": fn, "tn": tn},
         "denominators": {
             "accuracy": n,
@@ -419,6 +478,7 @@ def evaluate_run_file(
     n_boot: int = 10000,
     seed: int = 20260101,
     strict: bool = True,
+    pope_parser: str = DEFAULT_POPE_PARSER,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """Evaluate one run file.
 
@@ -433,6 +493,7 @@ def evaluate_run_file(
         n_boot: bootstrap replicates.
         seed: bootstrap seed.
         strict: see :func:`read_run`.
+        pope_parser: see :func:`evaluate_pope`.
 
     Returns:
         ``(result, outcome_rows)`` where ``result`` is the full metrics
@@ -447,6 +508,7 @@ def evaluate_run_file(
         metrics, outcomes = evaluate_pope(
             records, labels=labels, unparsed_policy=unparsed_policy,
             confidence=confidence, n_boot=n_boot, seed=seed,
+            pope_parser=pope_parser,
         )
         rows = [o.as_dict() for o in outcomes]
     elif benchmark == "chair":
@@ -466,6 +528,7 @@ def evaluate_run_file(
         "eval_config": {
             "confidence": confidence, "n_boot": n_boot, "bootstrap_seed": seed,
             "unparsed_policy": unparsed_policy,
+            "pope_parser": pope_parser,
         },
     }
     return result, rows
@@ -532,6 +595,11 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                     help="used when no explicit run files are given")
     ap.add_argument("--out-dir", type=Path, default=p.reports_dir)
     ap.add_argument("--format", choices=("json", "markdown", "both"), default="both")
+    ap.add_argument(
+        "--pope-parser", choices=tuple(POPE_PARSERS), default=DEFAULT_POPE_PARSER,
+        help="POPE answer rule. 'released' transcribes pope_eval.py (any "
+             "answer without a negation token counts as yes); 'strict' uses "
+             "this module's parser, which reports unparsable answers.")
     ap.add_argument("--unparsed-policy", choices=("negative", "exclude"),
                     default="negative")
     ap.add_argument("--confidence", type=float, default=0.95)
@@ -574,6 +642,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             result, rows = evaluate_run_file(
                 target, scorer_factory=scorer_factory, pope_dir=args.pope_dir,
                 unparsed_policy=args.unparsed_policy, confidence=args.confidence,
+                pope_parser=args.pope_parser,
                 n_boot=args.n_boot, seed=args.seed, strict=not args.no_strict,
             )
         except Exception as exc:

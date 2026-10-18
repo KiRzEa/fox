@@ -91,7 +91,8 @@ parameters uninitialised.
 
 The converted repo expands `<image>` into 576 ids in `input_ids` via the
 processor; the pre-4.44 path spliced embeddings inside the model instead. Image
-span measured on the host: `[5, 580]` with no system prompt, width exactly 576.
+span measured on the host: `[5, 580]` with `--system-prompt none`, width
+exactly 576; the released default pushes it to `[~40, ~616]`.
 
 ### 3.4 Two branches batched, not run sequentially
 
@@ -108,22 +109,86 @@ Consequence: the release computes the JSD from batch row 0 and applies that
 scalar to every row, which is harmless at batch 1 but silently wrong when
 batched. Ours is per-row.
 
-### 3.5 The system prompt
+### 3.5 The prompt
 
-The release builds prompts through the original LLaVA repo's
-`conv_templates["vicuna_v1"]`, which prepends a ~35-token system string. The
-HuggingFace chat template injects none — verified by reading
-`chat_template.jinja`, which emits `role.upper() + ': '` and nothing else.
+Resolved on 2026-10-18 by reading the released scripts rather than inferring
+from the paper. The release does **not** build prompts through
+`conv_templates`; `pope_eval.py` and `char_eval.py` never import it. The
+assembly is, in order:
 
-We send a **transcription** of `conv_vicuna_v1`'s system prompt. Byte-identity
-with what the release emits at runtime is **unverified**; the id is recorded in
-every record so a correction stays traceable.
+1. `pope_eval.py:59-64` / `char_eval.py:31-36` —
+   `INSTRUCTION_TEMPLATE["llava-1.5"] = "USER: <ImageHere> <question> ASSISTANT:"`.
+   A **space** before the question, not a newline, and no added instruction:
+   the POPE question goes in verbatim (`pope_v0_raw`) and CHAIR asks
+   `"Please describe this image in detail."` (`char_eval.py:157`, our
+   `chair_v1`).
+2. `eval_configs/llava-1.5_eval.yaml` sets, under `model:`, a
+   `system_message` equal to `conv_vicuna_v1`'s system string.
+3. `minigpt4/models/llava.py:344` reads it as `cfg.get("system_message", "")`
+   and `llava.py:228` does `instruction = [self.system_message + p for p in
+   instruction]`.
 
-This matters more than formatting: `m_sys` is the attention mass on the keys
-*before* the image, which the paper calls the anchor of the shortcut it claims
-to sever. Omitting the system prompt leaves only `<s>`, `USER`, `:` there.
-`--system-prompt none` is therefore a direct test of the paper's premise, not a
-convenience.
+Step 3 is a bare `+`. There is **no separator**, so the released prompt reads
+
+```
+...polite answers to the user's questions.USER: <image> Is there a dog in the image? ASSISTANT:
+```
+
+with the period running straight into `USER`. `--system-prompt llava_v1`
+(the default) reproduces that byte for byte; the string is asserted in
+`TestSystemPrompt.test_default_reproduces_the_released_concatenation_verbatim`
+so a later cleanup cannot quietly insert the space.
+
+Three arms are kept, each isolating one difference from this default:
+`--system-prompt llava_v1_spaced` (adds the space), `--system-prompt none`
+(drops the system message), `--wrapper newline` (HF's separator),
+`--prompt-template-id pope_v1` (appends "Answer the question using a single
+word or phrase").
+
+Those are not cosmetic. `m_sys` is the attention mass on the keys *before* the
+image, which the paper calls the anchor of the shortcut it claims to sever.
+Under `none` those keys are only `<s>`, `USER`, `:` — measured image span
+`[5, 580]` instead of `[~40, ~616]` — so `--system-prompt none` is a direct
+test of the paper's premise, not a convenience. And `pope_v1` is the arm most
+likely to explain session 1's inflated POPE baseline (81.90 against the
+paper's 76.77): it keeps answers to one parseable token.
+
+**Correction.** Session 1 ran with all four differences present at once —
+system prompt joined with a space, `\n` separator, and the "single word or
+phrase" suffix. An intermediate reading of `pope_eval.py` alone concluded the
+release sends no system prompt at all; `eval_configs/` shows otherwise. The
+session-1 run files are kept, under their own variant hashes, as the
+measurement of that combination.
+
+### 3.5.1 Generation settings, verified against the release
+
+| | release | ours | matters? |
+|---|---|---|---|
+| POPE `max_new_tokens` | `1` (`pope_eval.py:402`) | `1` | — |
+| CHAIR `max_new_tokens` | `512` (`char_eval.py:191`) | `512` | — |
+| `num_beams` | `1` (`--beam` default) | `1` | — |
+| sampling | `do_sample=True`, `top_p=0.9`, `temperature=1` (`llava.py:150,154,272`) | same | — |
+| `use_cache` | `pope_eval.py` passes `False`, but `llava.py:272` **hardcodes `True`** in the inner `generate`, so the argument is dead | `True` | no |
+| POPE scoring | see below | `--pope-parser released` | **yes** |
+
+The released POPE scorer (`pope_eval.py:232-242`) has no unparsable class:
+
+```python
+NEG_WORDS = ["No", "not", "no", "NO"]
+if any(word in NEG_WORDS for word in words) or any(word.endswith("n't") for word in words):
+    pred = 0
+else:
+    pred = 1
+```
+
+Anything without a negation token — including `""`, `"There"`, `"Maybe"` — is
+scored as **yes**. Our strict parser calls those unparsable and
+`--unparsed-policy negative` then scores them as **no**, the opposite. With
+the "single word or phrase" suffix the two agree on every sample (measured:
+3000/3000 on both session-1 POPE runs, so the committed numbers are unchanged
+by this). Without it, `max_new_tokens=1` produces first tokens that are
+neither `Yes` nor `No` and the rules diverge. `released` is therefore the
+default, and `metrics["pope_parser"]` records which rule produced any number.
 
 ### 3.6 Hyperparameter defaults come from the code, not the paper
 
@@ -182,6 +247,5 @@ hyperparameters" despite Algorithm 1 taking it as an input.
 |---|---|
 | Does transformers 5.16.1 give the same numbers as the vendored 4.29.2? | Track A on ~50 samples, greedy, fixed seed; diff token ids |
 | Is batching the two branches bit-equal to two sequential passes? | Same prompt both ways on GPU, compare logits |
-| Is our system prompt byte-identical to the release's? | Print `conv_templates["vicuna_v1"].get_prompt()` in Track A |
 | Is `chair_synonyms.txt` identical to Rohrbach's upstream? | Diff against the upstream file; our SHA-256 is in every metrics file. **Do this before quoting any CHAIR number externally.** |
 | Does `--system-prompt none` still show Fox's gain? | It is a planned job; a yes undermines the paper's premise |

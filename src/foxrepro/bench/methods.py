@@ -43,57 +43,105 @@ from foxrepro.bench.generate import (
     GenConfig, Method, MethodOutput, register_method,
 )
 from foxrepro.data.loaders import Sample
+from foxrepro.storage import SYSTEM_PROMPT_IDS, WRAPPER_IDS
 
-#: The conversation wrapper LLaVA-1.5 was instruction-tuned with.
+#: Conversation wrappers, selected by ``--wrapper``.
 #:
-#: The official HF chat template renders exactly this and injects NO system
-#: prompt: it emits ``role.upper() + ': '`` per message and nothing else. The
-#: system prompt is a separate message the caller supplies, which is why
-#: omitting it produces a valid-looking prompt that is nonetheless not what the
-#: released code sends.
-LLAVA_V1_5_WRAPPER = "USER: <image>\n{instruction} ASSISTANT:"
+#: ``released`` is verbatim from the Fox repo's ``INSTRUCTION_TEMPLATE``
+#: (``pope_eval.py:64``, ``char_eval.py:36``)::
+#:
+#:     "llava-1.5": "USER: <ImageHere> <question> ASSISTANT:"
+#:
+#: with ``<ImageHere>`` standing in for the image token. A SPACE separates the
+#: image from the question, not a newline.
+#:
+#: ``newline`` is the HuggingFace chat template's separator. It is kept as an
+#: ablation because switching to it is one of the prompt differences being
+#: measured.
+LLAVA_WRAPPERS: Dict[str, str] = {
+    "released": "USER: <image> {instruction} ASSISTANT:",
+    "newline": "USER: <image>\n{instruction} ASSISTANT:",
+}
+
+#: Default. Fidelity to the code that produced the paper's numbers.
+DEFAULT_WRAPPER_ID = "released"
 
 #: System prompts, selected by ``--system-prompt``.
 #:
-#: ``llava_v1`` is the ``conv_vicuna_v1`` system string from the original LLaVA
-#: repo, which is what the released Fox and VCD code send (they build prompts
-#: through ``conv_templates["vicuna_v1"]``). It is ~35 tokens, so it pushes the
-#: image span from index ~5 to ~40.
+#: The released scripts do send one, but not through ``conv_templates``, which
+#: is why reading ``pope_eval.py`` alone suggests otherwise. The path is:
 #:
-#: ``none`` omits it. That is not merely a convenience: it is a direct test of
-#: the paper's central claim. Fox's score is ``S = m_sys * H_vis``, where
-#: ``m_sys`` is the attention mass on the keys *before* the image -- which the
-#: paper identifies as "the primary anchor for latent priors" and the origin of
-#: the shortcut ``X_sys -> H_R -> Y_t``. With ``none`` those keys are just
-#: ``<s>``, ``USER`` and ``:``, carrying no instruction semantics at all. If
-#: Fox's gain survives that, the system-prompt anchor is not what drives it,
-#: and the causal story loses its subject. Nobody has run that comparison.
+#: 1. ``eval_configs/llava-1.5_eval.yaml`` sets, under ``model:``::
 #:
-#: NOTE on fidelity: this string is transcribed from the LLaVA repo's
-#: conversation template, not from the Fox release (which builds it at runtime
-#: through that same template). Treat byte-identity as unverified until the
-#: Track A cross-check confirms it; the id is recorded in every record so a
-#: later correction is traceable.
+#:        system_message: "A chat between a curious user and an artificial
+#:        intelligence assistant. The assistant gives helpful, detailed, and
+#:        polite answers to the user's questions."
+#:
+#: 2. ``minigpt4/models/llava.py:344`` reads it as
+#:    ``cfg.get("system_message", "")`` and stores it on the model;
+#: 3. ``llava.py:228``, inside ``generate``, does
+#:    ``instruction = [self.system_message + p for p in instruction]``.
+#:
+#: Step 3 is a bare ``+``. There is no separator, so the released prompt reads
+#: ``...user's questions.USER: <image> ...`` with the period running straight
+#: into ``USER``. ``llava_v1`` reproduces that exactly; ``llava_v1_spaced``
+#: inserts the space a reader would expect, and exists only to measure whether
+#: that one character matters. Each entry is concatenated with the wrapper
+#: verbatim, so the separator lives in the string rather than in the renderer.
+#:
+#: The choice is not cosmetic. Fox scores heads by ``S = m_sys * H_vis``, where
+#: ``m_sys`` is the attention mass on the keys BEFORE the image. Under
+#: ``llava_v1`` those keys are the ~40 tokens of the system message, which is
+#: what the paper's "primary anchor for latent priors" refers to. Under
+#: ``none`` they are only ``<s>``, ``USER`` and ``:`` -- measured image span
+#: ``[5, 580]`` instead of ``[~40, ~616]`` -- which leaves the paper's causal
+#: story without its premise. ``none`` is kept as that ablation.
+_LLAVA_V1_SYSTEM = (
+    "A chat between a curious user and an artificial intelligence "
+    "assistant. The assistant gives helpful, detailed, and polite answers "
+    "to the user's questions."
+)
+
 SYSTEM_PROMPTS: Dict[str, str] = {
-    "llava_v1": (
-        "A chat between a curious user and an artificial intelligence "
-        "assistant. The assistant gives helpful, detailed, and polite answers "
-        "to the user's questions."
-    ),
     "none": "",
+    "llava_v1": _LLAVA_V1_SYSTEM,            # released: no separator
+    "llava_v1_spaced": _LLAVA_V1_SYSTEM + " ",
 }
 
-#: Default. Faithful to the released code, not to the simpler thing.
+#: Default. Fidelity to the config that produced the paper's numbers.
 DEFAULT_SYSTEM_PROMPT_ID = "llava_v1"
 
+# ``GenConfig`` validates these names and the run-file variant tag is built
+# from them, so a name known to one module and not the other would either
+# reject a valid run or let two different prompts share a run file.
+assert set(SYSTEM_PROMPTS) == set(SYSTEM_PROMPT_IDS), (
+    "SYSTEM_PROMPTS and storage.SYSTEM_PROMPT_IDS disagree: "
+    f"{sorted(set(SYSTEM_PROMPTS) ^ set(SYSTEM_PROMPT_IDS))}"
+)
+assert set(LLAVA_WRAPPERS) == set(WRAPPER_IDS), (
+    "LLAVA_WRAPPERS and storage.WRAPPER_IDS disagree: "
+    f"{sorted(set(LLAVA_WRAPPERS) ^ set(WRAPPER_IDS))}"
+)
+assert DEFAULT_SYSTEM_PROMPT_ID in SYSTEM_PROMPTS
+assert DEFAULT_WRAPPER_ID in LLAVA_WRAPPERS
 
-def render_full_prompt(instruction: str, system_prompt_id: str) -> str:
+
+def render_full_prompt(
+    instruction: str, system_prompt_id: str = DEFAULT_SYSTEM_PROMPT_ID,
+    wrapper_id: str = DEFAULT_WRAPPER_ID,
+) -> str:
     """Assemble the complete string the processor receives.
 
-    ``conv_vicuna_v1`` separates the system prompt from the first turn with a
-    single space, so the result is one flat string rather than a chat object --
-    which is also what keeps the image-token span computable from
-    ``input_ids``.
+    The system prompt is concatenated with no separator, reproducing
+    ``llava.py:228``. Any separator is part of the ``SYSTEM_PROMPTS`` entry.
+
+    Args:
+        instruction: the question (POPE) or caption request (CHAIR).
+        system_prompt_id: key into :data:`SYSTEM_PROMPTS`.
+        wrapper_id: key into :data:`LLAVA_WRAPPERS`.
+
+    Returns:
+        The full prompt string.
     """
     try:
         system = SYSTEM_PROMPTS[system_prompt_id]
@@ -102,8 +150,14 @@ def render_full_prompt(instruction: str, system_prompt_id: str) -> str:
             f"unknown system_prompt_id {system_prompt_id!r}; "
             f"known: {sorted(SYSTEM_PROMPTS)}"
         ) from None
-    body = LLAVA_V1_5_WRAPPER.format(instruction=instruction)
-    return f"{system} {body}" if system else body
+    try:
+        wrapper = LLAVA_WRAPPERS[wrapper_id]
+    except KeyError:
+        raise ValueError(
+            f"unknown wrapper_id {wrapper_id!r}; known: {sorted(LLAVA_WRAPPERS)}"
+        ) from None
+    return system + wrapper.format(instruction=instruction)
+
 
 #: Released Fox defaults for LLaVA-1.5, from the CODE, not the paper. They
 #: disagree -- see ``foxrepro.fox.reference`` for the full table -- and the
@@ -196,11 +250,15 @@ class _LlavaMethod(Method):
     def _system_prompt_id(self) -> str:
         return getattr(self.cfg, "system_prompt_id", DEFAULT_SYSTEM_PROMPT_ID)
 
+    def _wrapper_id(self) -> str:
+        return getattr(self.cfg, "wrapper_id", DEFAULT_WRAPPER_ID)
+
     def describe(self) -> Dict[str, Any]:
         info = dict(super().describe())
         spid = self._system_prompt_id()
         info.update({
-            "wrapper": LLAVA_V1_5_WRAPPER,
+            "wrapper_id": self._wrapper_id(),
+            "wrapper": LLAVA_WRAPPERS[self._wrapper_id()],
             "system_prompt_id": spid,
             "system_prompt": SYSTEM_PROMPTS[spid],
             "eager_layers": sorted(self._eager_layers),
@@ -214,7 +272,8 @@ class _LlavaMethod(Method):
     def _prepare(self, sample: Sample, prompt: str) -> Dict[str, Any]:
         from PIL import Image
 
-        text = render_full_prompt(prompt, self._system_prompt_id())
+        text = render_full_prompt(
+            prompt, self._system_prompt_id(), self._wrapper_id())
         with Image.open(sample.image_path) as im:
             image = im.convert("RGB")
         return self.processor(images=image, text=text, return_tensors="pt")

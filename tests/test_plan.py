@@ -14,7 +14,7 @@ import shlex
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from foxrepro.bench.generate import GenConfig
 from foxrepro.bench.plan import (
@@ -724,3 +724,84 @@ class TestArchive(unittest.TestCase):
             self.assertNotEqual(rc, 0, "results/runs/*.jsonl must not be ignored")
         finally:
             probe.unlink(missing_ok=True)
+
+
+class TestCalibrationLoader(unittest.TestCase):
+    """``--calibrate`` feeds measured times back into the estimates.
+
+    The TSV is append-only, one row per job *invocation*, so a job can appear
+    several times: once per resume, and once per failure. Getting the
+    reduction wrong is not a cosmetic error -- the planner packs sessions
+    against a ten-hour wall from these numbers.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+
+    def _freeze(self, tsv_text: str) -> Dict[str, Any]:
+        from foxrepro.bench.plan import freeze_plan
+
+        tsv = self.tmp / "_job_times.tsv"
+        tsv.write_text(tsv_text)
+        return freeze_plan(11, 10.0, self.tmp / "plan.json",
+                           calibrate=tsv, pilot=True)
+
+    def _est(self, payload: Dict[str, Any], job_id: str) -> float:
+        return payload["jobs"][job_id]["est_s"]
+
+    def test_a_failed_row_is_discarded(self) -> None:
+        """Session 1's four CHAIR jobs died in 6 s on a missing file.
+
+        Those rows measure the failure. Had they been believed, the planner
+        would have budgeted 6 seconds for a job that costs over an hour.
+        """
+        jid = "table2:sampling:chair:val2014_500"
+        payload = self._freeze(f"{jid}\t0.1\t1\n")
+        from foxrepro.bench.plan import PLAN
+
+        job = next(j for j in PLAN if j.job_id() == jid)
+        self.assertEqual(self._est(payload, jid), round(job.est_seconds(), 1))
+        self.assertEqual(payload["n_calibrated"], 0)
+
+    def test_a_failure_after_a_success_does_not_erase_it(self) -> None:
+        """Last-row-wins is the trap: the good measurement must survive."""
+        jid = "table2:sampling:chair:val2014_500"
+        payload = self._freeze(f"{jid}\t70.2\t0\n{jid}\t0.1\t1\n")
+        self.assertAlmostEqual(self._est(payload, jid), 70.2 * 60, places=1)
+
+    def test_a_resumed_job_sums_its_invocations(self) -> None:
+        """Cut by the wall at 40 min, finished in 30 more -> it costs 70."""
+        jid = "table2:sampling:chair:val2014_500"
+        payload = self._freeze(f"{jid}\t40.0\t0\n{jid}\t30.2\t0\n")
+        self.assertAlmostEqual(self._est(payload, jid), 70.2 * 60, places=1)
+
+    def test_the_real_session_one_tsv_gives_the_measured_times(self) -> None:
+        """The file session 1 actually produced, verbatim."""
+        tsv = (REPO_ROOT / "logs" / "_job_times.tsv")
+        if not tsv.is_file():          # not every clone has run a session
+            self.skipTest("no logs/_job_times.tsv in this checkout")
+        payload = self._freeze(tsv.read_text())
+        want = {
+            "table1:fox:pope:adversarial": 58.5,
+            "table1:sampling:pope:adversarial": 30.1,
+            "table2:fox:chair:val2014_500": 93.3,
+            "table2:sampling:chair:val2014_500": 70.2,
+            "table9:fox:chair:val2014_500:greedy": 92.3,
+            "table9:sampling:chair:val2014_500:greedy": 65.5,
+        }
+        self.assertEqual(payload["n_calibrated"], len(want))
+        for jid, minutes in want.items():
+            with self.subTest(jid=jid):
+                self.assertAlmostEqual(
+                    self._est(payload, jid), minutes * 60, places=1
+                )
+
+    def test_a_malformed_row_is_skipped_not_fatal(self) -> None:
+        payload = self._freeze(
+            "garbage\n"
+            "table1:fox:pope:adversarial\tnot-a-number\t0\n"
+            "table1:sampling:pope:adversarial\t30.1\tnot-a-code\n"
+        )
+        self.assertEqual(payload["n_calibrated"], 0)

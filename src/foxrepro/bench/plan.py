@@ -803,16 +803,33 @@ def freeze_plan(
     ``calibrate`` is a TSV of ``job_id<TAB>minutes<TAB>returncode`` appended by
     :func:`run_session`. Feeding it back replaces the estimates, which are
     scaled from a single measurement and will drift.
+
+    Rows with a non-zero return code are discarded: a job that died in 6
+    seconds on a missing file measures the failure, not the work. Rows for the
+    same job are **summed**, because a job cut by the session wall and resumed
+    appears once per invocation and the cost of running it from scratch is the
+    total. Taking the last row instead -- which is what a plain dict
+    assignment does -- would let one failed retry after a good run convince
+    the planner that a 93-minute job takes 6 seconds, and the session that
+    believed it would overcommit by hours.
     """
     measured: Dict[str, float] = {}
     if calibrate and Path(calibrate).is_file():
         for line in Path(calibrate).read_text().splitlines():
             parts = line.split("\t")
-            if len(parts) >= 2:
+            if len(parts) < 2:
+                continue
+            try:
+                minutes = float(parts[1])
+            except ValueError:
+                continue
+            if len(parts) >= 3:
                 try:
-                    measured[parts[0]] = float(parts[1]) * 60.0
+                    if int(parts[2]) != 0:
+                        continue
                 except ValueError:
                     continue
+            measured[parts[0]] = measured.get(parts[0], 0.0) + minutes * 60.0
 
     jobs = PLAN
     groups = partition_jobs(n_sessions, jobs, pilot=pilot)
@@ -1010,11 +1027,13 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                    help="a _job_times.tsv written by `run`, to replace estimates")
     a.add_argument("--round", default="r1", help="tag for the pack filenames")
     a.add_argument("--pilot", action="store_true",
-                   help="pin session 1 to the four POPE-adversarial jobs "
-                        "that make it conclusive on its own: baseline, "
-                        "fox, fox --mode off, fox --mode ulp_control. "
+                   help="pin session 1 to the jobs that make it conclusive "
+                        "on its own: baseline and fox on POPE-adversarial, "
+                        "and on CHAIR under both sampling and greedy. "
                         "Cost-balancing alone would spread those across "
-                        "sessions and leave the first one uncomparable.")
+                        "sessions -- a baseline in one and the method in "
+                        "another -- leaving nothing comparable after ten "
+                        "GPU hours.")
     a.add_argument("--out", type=Path, default=default_plan)
 
     a = sub.add_parser("run", help="execute one session (on Kaggle)")

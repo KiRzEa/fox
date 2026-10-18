@@ -1,68 +1,68 @@
 {
-  "round": "r1",
+  "round": "r2",
   "n_sessions": 11,
   "budget_hours": 10.0,
-  "n_calibrated": 0,
+  "n_calibrated": 6,
   "jobs": {
     "table2:sampling:chair:val2014_500": {
       "id": "table2:sampling:chair:val2014_500",
       "target": "table2",
       "note": "CHAIR_S / CHAIR_I",
       "command": "python -m foxrepro.bench.generate --method sampling --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
-      "est_s": 3000.0,
+      "est_s": 4212.0,
       "run_file": "m-sampling__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-5c7c06df.jsonl",
       "n_samples": 500,
-      "measured": false
+      "measured": true
     },
     "table9:sampling:chair:val2014_500:greedy": {
       "id": "table9:sampling:chair:val2014_500:greedy",
       "target": "table9",
       "note": "greedy CHAIR",
       "command": "python -m foxrepro.bench.generate --method sampling --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
-      "est_s": 3000.0,
+      "est_s": 3930.0,
       "run_file": "m-sampling__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-4a534adb.jsonl",
       "n_samples": 500,
-      "measured": false
+      "measured": true
     },
     "table2:fox:chair:val2014_500": {
       "id": "table2:fox:chair:val2014_500",
       "target": "table2",
       "note": "CHAIR_S / CHAIR_I",
       "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native",
-      "est_s": 3900.0,
+      "est_s": 5598.0,
       "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-5c7c06df.jsonl",
       "n_samples": 500,
-      "measured": false
+      "measured": true
     },
     "table9:fox:chair:val2014_500:greedy": {
       "id": "table9:fox:chair:val2014_500:greedy",
       "target": "table9",
       "note": "greedy CHAIR",
       "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native",
-      "est_s": 3900.0,
+      "est_s": 5538.0,
       "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-4a534adb.jsonl",
       "n_samples": 500,
-      "measured": false
+      "measured": true
     },
     "table1:sampling:pope:adversarial": {
       "id": "table1:sampling:pope:adversarial",
       "target": "table1",
       "note": "POPE accuracy (T1) and F1 (T8)",
       "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 4200.0,
+      "est_s": 1806.0,
       "run_file": "m-sampling__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-2d07edcb.jsonl",
       "n_samples": 3000,
-      "measured": false
+      "measured": true
     },
     "table1:fox:pope:adversarial": {
       "id": "table1:fox:pope:adversarial",
       "target": "table1",
       "note": "POPE accuracy (T1) and F1 (T8)",
       "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
-      "est_s": 8400.0,
+      "est_s": 3510.0,
       "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-2d07edcb.jsonl",
       "n_samples": 3000,
-      "measured": false
+      "measured": true
     },
     "fig9:fox:pope:adversarial:t0.2:n500": {
       "id": "fig9:fox:pope:adversarial:t0.2:n500",
@@ -616,7 +616,7 @@
         "table1:sampling:pope:adversarial",
         "table1:fox:pope:adversarial"
       ],
-      "est_hours": 7.33
+      "est_hours": 6.83
     },
     {
       "session": 2,

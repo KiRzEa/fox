@@ -1024,7 +1024,12 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     a.add_argument("--budget-hours", type=float, default=10.0,
                    help="per session; Kaggle caps a session at 12 h")
     a.add_argument("--calibrate", type=Path, default=None,
-                   help="a _job_times.tsv written by `run`, to replace estimates")
+                   help="ONE round's _job_times.tsv, written by `run`, to "
+                        "replace the estimates. Rows for the same job are "
+                        "summed (a job cut by the wall and resumed appears "
+                        "once per invocation), so do not concatenate rounds: "
+                        "keep logs/_job_times_r1.tsv, _r2.tsv and pass the "
+                        "latest one.")
     a.add_argument("--round", default="r1", help="tag for the pack filenames")
     a.add_argument("--pilot", action="store_true",
                    help="pin session 1 to the jobs that make it conclusive "

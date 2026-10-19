@@ -37,3 +37,19 @@ after it completes adds the new records rather than replacing the file.
 
 The live run directory (`foxrepro.storage.Paths.runs_root`) stays outside the
 repo and gitignored: it is working state, and on Kaggle it is ephemeral.
+
+## Two rounds of session 1 are archived, on purpose
+
+The variant hash in each filename is derived from the fields that change the
+output, so the same job under a different prompt is a different file and both
+survive here. Session 1 exists twice:
+
+| hash | prompt | POPE-adv baseline / Fox |
+|---|---|---|
+| `0a53e43e` (POPE), `ccf25f3f` / `2ff108f2` (CHAIR) | **r1** — system prompt joined with a space, `\n` before the question, and `"Answer the question using a single word or phrase."` appended | 81.90 / 83.33 |
+| `2d07edcb` (POPE), `5c7c06df` / `4a534adb` (CHAIR) | **r2** — byte-faithful to the release (`docs/DEVIATIONS.md` §3.5) | 77.17 / 81.40 |
+
+r1 is not a failed run to be deleted. It is the measurement of what those
+three prompt differences do together, and it is the reason the paper's
+POPE-adversarial baseline of 76.77 is reachable at all: r1 sat 5.13 points
+above it, r2 sits 0.40 above. Quote r2 for any comparison against the paper.

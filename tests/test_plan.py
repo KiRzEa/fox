@@ -777,26 +777,50 @@ class TestCalibrationLoader(unittest.TestCase):
         payload = self._freeze(f"{jid}\t40.0\t0\n{jid}\t30.2\t0\n")
         self.assertAlmostEqual(self._est(payload, jid), 70.2 * 60, places=1)
 
-    def test_the_real_session_one_tsv_gives_the_measured_times(self) -> None:
-        """The file session 1 actually produced, verbatim."""
-        tsv = (REPO_ROOT / "logs" / "_job_times.tsv")
-        if not tsv.is_file():          # not every clone has run a session
-            self.skipTest("no logs/_job_times.tsv in this checkout")
-        payload = self._freeze(tsv.read_text())
+    def test_the_real_session_tsvs_give_the_measured_times(self) -> None:
+        """The files the sessions actually produced, verbatim.
+
+        One file per round, not one accumulating file. The loader sums rows
+        for the same job, which is right for a job cut by the wall and
+        resumed inside one round and wrong across rounds -- r1 and r2 both
+        ran every session-1 job, so a single concatenated file would claim
+        each job costs the two rounds added together. ``logs/`` is gitignored,
+        so a fresh clone skips this.
+        """
         want = {
-            "table1:fox:pope:adversarial": 58.5,
-            "table1:sampling:pope:adversarial": 30.1,
-            "table2:fox:chair:val2014_500": 93.3,
-            "table2:sampling:chair:val2014_500": 70.2,
-            "table9:fox:chair:val2014_500:greedy": 92.3,
-            "table9:sampling:chair:val2014_500:greedy": 65.5,
+            "_job_times_r1.tsv": {
+                "table1:fox:pope:adversarial": 58.5,
+                "table1:sampling:pope:adversarial": 30.1,
+                "table2:fox:chair:val2014_500": 93.3,
+                "table2:sampling:chair:val2014_500": 70.2,
+                "table9:fox:chair:val2014_500:greedy": 92.3,
+                "table9:sampling:chair:val2014_500:greedy": 65.5,
+            },
+            "_job_times_r2.tsv": {
+                "table1:fox:pope:adversarial": 55.1,
+                "table1:sampling:pope:adversarial": 27.3,
+                "table2:fox:chair:val2014_500": 90.6,
+                "table2:sampling:chair:val2014_500": 68.4,
+                "table9:fox:chair:val2014_500:greedy": 90.9,
+                "table9:sampling:chair:val2014_500:greedy": 65.1,
+            },
         }
-        self.assertEqual(payload["n_calibrated"], len(want))
-        for jid, minutes in want.items():
-            with self.subTest(jid=jid):
-                self.assertAlmostEqual(
-                    self._est(payload, jid), minutes * 60, places=1
-                )
+        seen = 0
+        for name, expect in want.items():
+            tsv = REPO_ROOT / "logs" / name
+            if not tsv.is_file():
+                continue
+            seen += 1
+            with self.subTest(round=name):
+                payload = self._freeze(tsv.read_text())
+                self.assertEqual(payload["n_calibrated"], len(expect))
+                for jid, minutes in expect.items():
+                    self.assertAlmostEqual(
+                        self._est(payload, jid), minutes * 60, places=1,
+                        msg=f"{name}:{jid}",
+                    )
+        if seen == 0:
+            self.skipTest("no logs/_job_times_r*.tsv in this checkout")
 
     def test_a_malformed_row_is_skipped_not_fatal(self) -> None:
         payload = self._freeze(

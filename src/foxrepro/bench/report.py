@@ -123,12 +123,34 @@ class RunResult:
     def decoding(self) -> str:
         return str(self.prov.get("decoding") or "sampling")
 
+    @property
+    def prompt_arm(self) -> Dict[str, str]:
+        """The prompt fields that make two runs of one job incomparable.
+
+        Session 1 was run twice -- once before the released prompt was read
+        and once after -- so the archive legitimately holds two results for
+        the same (benchmark, split, method). They differ only here.
+        """
+        return {
+            "system_prompt_id": str(self.prov.get("system_prompt_id") or "?"),
+            "wrapper_id": str(self.prov.get("wrapper_id") or "?"),
+            "prompt_template_id": str(self.prov.get("prompt_template_id") or "?"),
+        }
+
+    def arm_label(self) -> str:
+        a = self.prompt_arm
+        return (f"{a['system_prompt_id']}/{a['wrapper_id']}"
+                f"/{a['prompt_template_id']}")
+
 
 def load_results(
     reports_dir: Path,
     decoding: Optional[str] = None,
     dtype: Optional[str] = None,
     seed: Optional[int] = None,
+    system_prompt_id: Optional[str] = None,
+    wrapper_id: Optional[str] = None,
+    prompt_template_ids: Optional[Sequence[str]] = None,
 ) -> List[RunResult]:
     """Load every ``*.metrics.json`` in ``reports_dir`` (plus its outcomes).
 
@@ -137,6 +159,11 @@ def load_results(
         decoding: keep only this decoding mode (``"sampling"`` / ``"greedy"``).
         dtype: keep only this dtype.
         seed: keep only this seed.
+        system_prompt_id: keep only this system-prompt arm.
+        wrapper_id: keep only this turn wrapper.
+        prompt_template_ids: keep only these prompt templates. A sequence
+            because one report spans both benchmarks, which use different
+            templates -- pass the faithful id for each.
 
     Returns:
         Matching :class:`RunResult` objects.
@@ -150,6 +177,16 @@ def load_results(
         if dtype and str(prov.get("dtype")) != dtype:
             continue
         if seed is not None and int(prov.get("seed", -1)) != seed:
+            continue
+        if (system_prompt_id is not None
+                and str(prov.get("system_prompt_id") or "?") != system_prompt_id):
+            continue
+        if (wrapper_id is not None
+                and str(prov.get("wrapper_id") or "?") != wrapper_id):
+            continue
+        if (prompt_template_ids is not None
+                and str(prov.get("prompt_template_id") or "?")
+                not in prompt_template_ids):
             continue
         outcomes_path = Path(str(path).replace(".metrics.json", ".outcomes.jsonl"))
         rows: List[Dict[str, Any]] = []
@@ -169,10 +206,22 @@ def _index(results: Sequence[RunResult]) -> Dict[Tuple[str, str, str], RunResult
     for r in results:
         key = (r.benchmark, r.split, r.method)
         if key in index:
+            prev = index[key]
+            differing = {
+                f: (prev.prov.get(f), r.prov.get(f))
+                for f in sorted(set(prev.prov) | set(r.prov))
+                if prev.prov.get(f) != r.prov.get(f)
+            }
+            # Reporting "pass --dtype" when the runs differ by prompt sends the
+            # reader after a filter that cannot separate them. Name the fields.
+            detail = "; ".join(f"{f}: {a!r} vs {b!r}"
+                               for f, (a, b) in differing.items()) or "nothing"
             raise ValueError(
-                f"two metrics files for {key}: {index[key].metrics_path.name} "
-                f"and {r.metrics_path.name}. Filter by --dtype/--seed/--decoding, "
-                "or move the stale one out of the reports directory."
+                f"two metrics files for {key}: {prev.metrics_path.name} "
+                f"and {r.metrics_path.name}. They differ in {detail}. "
+                "Filter with --system-prompt / --wrapper / --prompt-template, "
+                "or --dtype / --seed / --decoding, or move the stale one out "
+                "of the reports directory."
             )
         index[key] = r
     return index
@@ -469,11 +518,38 @@ def render_provenance_audit(results: Sequence[RunResult]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _arm_note(system_prompt_id: Optional[str], wrapper_id: Optional[str],
+              prompt_template_ids: Optional[Sequence[str]]) -> Optional[str]:
+    """One line saying which prompt arm the tables below are built from.
+
+    A report that silently tabulated whichever of two archived arms happened
+    to load first would be worse than one that refused to build, so the arm
+    is stated in the output rather than left to the reader's assumption.
+    """
+    bits = []
+    if system_prompt_id:
+        bits.append(f"`--system-prompt {system_prompt_id}`")
+    if wrapper_id:
+        bits.append(f"`--wrapper {wrapper_id}`")
+    if prompt_template_ids:
+        bits.append("`" + "`, `".join(sorted(prompt_template_ids)) + "`")
+    if not bits:
+        return None
+    return "Prompt arm: " + ", ".join(bits) + "."
+
+
 def render_report(
     results: Sequence[RunResult], baseline: str = "sampling",
-    include_paper: bool = True,
+    include_paper: bool = True, arm_note: Optional[str] = None,
 ) -> str:
-    """Compose the whole Markdown report."""
+    """Compose the whole Markdown report.
+
+    Args:
+        results: evaluated runs, already filtered to one prompt arm.
+        baseline: the method every gap is measured against.
+        include_paper: add the paper's printed values for comparison.
+        arm_note: one line naming the arm, from :func:`_arm_note`.
+    """
     sampling = [r for r in results if r.decoding == "sampling"]
     greedy = [r for r in results if r.decoding == "greedy"]
     parts = [
@@ -485,6 +561,8 @@ def render_report(
         "indistinguishable on this evidence, whatever the point estimates say.",
         "",
     ]
+    if arm_note:
+        parts.extend([arm_note, ""])
     if sampling:
         parts.append(render_pope_table(
             sampling, baseline, "Table 1 -- POPE (nucleus sampling, p=0.9, T=1.0)",
@@ -522,19 +600,66 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--dtype", default=None, help="restrict to one dtype")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--no-paper-reference", action="store_true")
+    ap.add_argument(
+        "--prompt-arm", choices=("faithful", "any"), default="faithful",
+        help="'faithful' (default) keeps only the runs whose prompt is "
+             "byte-identical to the release, which are the only ones "
+             "comparable to the paper. 'any' keeps everything and will "
+             "refuse to build a table if two runs of one job survive -- use "
+             "it with the explicit filters below to report a specific arm.")
+    ap.add_argument("--system-prompt", default=None,
+                    help="restrict to one system-prompt arm (e.g. none)")
+    ap.add_argument("--wrapper", default=None,
+                    help="restrict to one turn wrapper (e.g. newline)")
+    ap.add_argument("--prompt-template", action="append", default=None,
+                    metavar="ID",
+                    help="restrict to these prompt templates; repeatable, "
+                         "since one report spans both benchmarks")
     args = ap.parse_args(argv)
+
+    sysp, wrap, tmpl = args.system_prompt, args.wrapper, args.prompt_template
+    if args.prompt_arm == "faithful":
+        # The defaults in bench.methods and data.loaders, which DEVIATIONS
+        # 3.5 shows are the released ones. Hardcoding them here would drift
+        # the moment either default is corrected again.
+        from foxrepro.bench.methods import (
+            DEFAULT_SYSTEM_PROMPT_ID, DEFAULT_WRAPPER_ID,
+        )
+        from foxrepro.data.loaders import DEFAULT_TEMPLATE_IDS
+
+        sysp = sysp or DEFAULT_SYSTEM_PROMPT_ID
+        wrap = wrap or DEFAULT_WRAPPER_ID
+        tmpl = tmpl or sorted(DEFAULT_TEMPLATE_IDS.values())
 
     results = load_results(
         args.reports_dir,
         decoding=None if args.decoding == "all" else args.decoding,
         dtype=args.dtype, seed=args.seed,
+        system_prompt_id=sysp, wrapper_id=wrap, prompt_template_ids=tmpl,
     )
     if not results:
-        print(f"no metrics files in {args.reports_dir}; run evaluate.py first",
-              file=sys.stderr)
+        # "run evaluate.py first" is wrong, and wastes the reader's time, when
+        # the files are there and the filter removed them all.
+        present = load_results(args.reports_dir)
+        if not present:
+            print(f"no metrics files in {args.reports_dir}; "
+                  "run evaluate.py first", file=sys.stderr)
+            return 1
+        arms = sorted({r.arm_label() for r in present})
+        print(
+            f"{len(present)} metrics file(s) in {args.reports_dir}, but none "
+            f"match the requested prompt arm "
+            f"({_arm_note(sysp, wrap, tmpl) or 'no filter'}).\n"
+            f"Arms present (system_prompt/wrapper/template): "
+            + ", ".join(arms)
+            + "\nPass --prompt-arm any, or name one of the above with "
+              "--system-prompt / --wrapper / --prompt-template.",
+            file=sys.stderr,
+        )
         return 1
     text = render_report(results, baseline=args.baseline,
-                         include_paper=not args.no_paper_reference)
+                         include_paper=not args.no_paper_reference,
+                         arm_note=_arm_note(sysp, wrap, tmpl))
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(text, encoding="utf-8")

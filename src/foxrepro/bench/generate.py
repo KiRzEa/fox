@@ -65,6 +65,7 @@ from typing import (
 from foxrepro.data.loaders import (  # noqa: E402
     Sample, load_benchmark, render_prompt, template_benchmark,
 )
+from foxrepro.data.loaders import DEFAULT_TEMPLATE_IDS  # noqa: E402
 from foxrepro.storage import (  # noqa: E402
     BENCHMARK_SPLITS, DTYPES, INTERVENTION_MODES, LOGIT_DTYPES,
     MAX_NEW_TOKENS_DEFAULT, PROVENANCE_FIELDS, SOFTMAX_DTYPES,
@@ -894,8 +895,14 @@ def build_parser() -> argparse.ArgumentParser:
              "randomly initialised vision tower and projector. load_llava() "
                "refuses that, but do not rely on the guard -- pass the right id.",
     )
-    ap.add_argument("--prompt-template-id", default=None,
-                    help="default: pope_v1 for POPE, chair_v1 for CHAIR")
+    ap.add_argument(
+        "--prompt-template-id", default=None,
+        help="default: the template the release sends -- "
+             + ", ".join(f"{b}={t}" for b, t in sorted(DEFAULT_TEMPLATE_IDS.items()))
+             + ". pope_v1 appends \"Answer the question using a single word or "
+               "phrase\", which the release does not and which is worth about "
+               "four points of POPE-adversarial accuracy; it is kept as an "
+               "ablation.")
     ap.add_argument("--max-new-tokens", type=int, default=None,
                     help="default: 1 for POPE, 512 for CHAIR")
     ap.add_argument("--decoding", choices=("sampling", "greedy"), default="sampling")
@@ -982,9 +989,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     method = "echo" if args.dry_run else args.method
-    template = args.prompt_template_id or (
-        "pope_v1" if args.benchmark == "pope" else "chair_v1"
-    )
+    template = args.prompt_template_id or DEFAULT_TEMPLATE_IDS[args.benchmark]
     max_new = args.max_new_tokens or MAX_NEW_TOKENS_DEFAULT[args.benchmark]
 
     cfg = GenConfig(

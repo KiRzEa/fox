@@ -334,3 +334,120 @@ class TestEndToEnd(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestReportPromptArms(unittest.TestCase):
+    """Two archived rounds of one job must not silently become one table.
+
+    Session 1 ran twice: once with the prompt this project invented, once
+    byte-faithful to the release. Both are kept, and they differ by four
+    points of POPE-adversarial accuracy. A report that picked whichever
+    loaded first would be worse than one that refused to build.
+    """
+
+    FAITHFUL = {"system_prompt_id": "llava_v1", "wrapper_id": "released",
+                "prompt_template_id": "pope_v0_raw"}
+    OLD = {"system_prompt_id": "llava_v1", "wrapper_id": "newline",
+           "prompt_template_id": "pope_v1"}
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.reports = Path(self._tmp.name) / "reports"
+        self.reports.mkdir()
+
+    def _write(self, name: str, method: str, arm: Dict[str, str],
+               accuracy: float) -> None:
+        n = 3000
+        k = int(round(accuracy * n))
+        prov = {
+            "method": method, "benchmark": "pope", "split": "adversarial",
+            "seed": 42, "dtype": "fp16", "decoding": "sampling",
+            "pope_parser": "released", **arm,
+        }
+        met = {
+            "benchmark": "pope", "n_samples": n, "n_unparsed": 0,
+            "accuracy": {"name": "pope_accuracy", "point": accuracy,
+                         "ci_lo": accuracy - 0.014, "ci_hi": accuracy + 0.014,
+                         "n": n, "successes": k, "confidence": 0.95,
+                         "interval_method": "wilson"},
+            "f1": {"name": "pope_f1", "point": accuracy, "ci_lo": accuracy - 0.02,
+                   "ci_hi": accuracy + 0.02, "n": n, "confidence": 0.95,
+                   "interval_method": "bootstrap"},
+            "yes_ratio": {"name": "pope_yes_ratio", "point": 0.5,
+                          "ci_lo": 0.48, "ci_hi": 0.52, "n": n,
+                          "confidence": 0.95, "interval_method": "wilson"},
+            "confusion": {"tp": k // 2, "fp": (n - k) // 2,
+                          "fn": (n - k) - (n - k) // 2, "tn": k - k // 2},
+            "denominators": {"accuracy": n, "precision": n // 2, "recall": n // 2,
+                             "f1": n, "yes_ratio": n,
+                             "n_ground_truth_yes": n // 2,
+                             "n_ground_truth_no": n // 2},
+        }
+        (self.reports / name).write_text(
+            json.dumps({"provenance": prov, "metrics": met}), encoding="utf-8")
+
+    def _both_rounds(self) -> None:
+        self._write("r2_sampling.metrics.json", "sampling", self.FAITHFUL, 0.7717)
+        self._write("r2_fox.metrics.json", "fox", self.FAITHFUL, 0.8140)
+        self._write("r1_sampling.metrics.json", "sampling", self.OLD, 0.8190)
+        self._write("r1_fox.metrics.json", "fox", self.OLD, 0.8333)
+
+    def test_the_faithful_filter_keeps_exactly_one_round(self) -> None:
+        from foxrepro.bench.report import load_results
+
+        self._both_rounds()
+        self.assertEqual(len(load_results(self.reports)), 4)
+        kept = load_results(self.reports, system_prompt_id="llava_v1",
+                            wrapper_id="released",
+                            prompt_template_ids=["pope_v0_raw", "chair_v1"])
+        self.assertEqual(len(kept), 2)
+        self.assertEqual({r.method for r in kept}, {"sampling", "fox"})
+        self.assertEqual(
+            {round(r.met["accuracy"]["point"], 4) for r in kept},
+            {0.7717, 0.8140},
+        )
+
+    def test_an_unfiltered_archive_refuses_to_build_a_table(self) -> None:
+        from foxrepro.bench.report import load_results, render_report
+
+        self._both_rounds()
+        with self.assertRaises(ValueError) as ctx:
+            render_report(load_results(self.reports), baseline="sampling")
+        msg = str(ctx.exception)
+        # It must name the fields that actually differ, not send the reader
+        # after --dtype, which cannot separate these two.
+        self.assertIn("wrapper_id", msg)
+        self.assertIn("prompt_template_id", msg)
+        self.assertIn("--wrapper", msg)
+
+    def test_the_cli_defaults_to_the_faithful_arm(self) -> None:
+        self._both_rounds()
+        out = Path(self._tmp.name) / "report.md"
+        proc = subprocess.run(
+            [sys.executable, "-m", "foxrepro.bench.report",
+             "--reports-dir", str(self.reports), "--out", str(out)],
+            env=_with_src_on_path(dict(os.environ)),
+            capture_output=True, text=True, timeout=300,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr[-3000:])
+        text = out.read_text(encoding="utf-8")
+        self.assertIn("Prompt arm:", text)
+        self.assertIn("pope_v0_raw", text)
+        self.assertIn("77.17", text)      # the faithful baseline
+        self.assertNotIn("81.90", text)   # the old one must not appear
+
+    def test_filtering_everything_out_says_which_arms_exist(self) -> None:
+        """Not "run evaluate.py first": the files are there."""
+        self._write("r1_sampling.metrics.json", "sampling", self.OLD, 0.8190)
+        proc = subprocess.run(
+            [sys.executable, "-m", "foxrepro.bench.report",
+             "--reports-dir", str(self.reports)],
+            env=_with_src_on_path(dict(os.environ)),
+            capture_output=True, text=True, timeout=300,
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertNotIn("run evaluate.py first", proc.stderr)
+        self.assertIn("Arms present", proc.stderr)
+        self.assertIn("newline", proc.stderr)
+        self.assertIn("--prompt-arm any", proc.stderr)

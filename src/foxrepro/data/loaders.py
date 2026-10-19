@@ -32,6 +32,7 @@ from typing import Dict, Iterable, Iterator, List, Optional, Sequence
 
 __all__ = [
     "PROMPT_TEMPLATES",
+    "DEFAULT_TEMPLATE_IDS",
     "render_prompt",
     "Sample",
     "load_pope",
@@ -73,6 +74,15 @@ _TEMPLATE_BENCHMARK = {
     "pope_v0_raw": "pope",
     "chair_v1": "chair",
     "chair_v2_short": "chair",
+}
+
+#: ``benchmark -> the template the release sends``. One definition, read by
+#: ``plan.Job.template_id`` and by ``report`` when it filters the archive down
+#: to the arm that is comparable to the paper. Two copies of this mapping
+#: would let the planner run one arm while the report tabulated another.
+DEFAULT_TEMPLATE_IDS: Dict[str, str] = {
+    "pope": "pope_v0_raw",
+    "chair": "chair_v1",
 }
 
 _IMAGE_ID_RE = re.compile(r"(\d{6,})")

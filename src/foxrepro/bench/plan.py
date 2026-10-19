@@ -84,6 +84,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from foxrepro.storage import BENCHMARK_SPLITS, RunKey, paths
+from foxrepro.data.loaders import DEFAULT_TEMPLATE_IDS
 
 __all__ = [
     "Job", "PLAN", "measured_cost", "scan_progress", "next_jobs", "render_plan",
@@ -144,7 +145,7 @@ class Job:
         """
         if self.prompt_template_id:
             return self.prompt_template_id
-        return "pope_v0_raw" if self.benchmark == "pope" else "chair_v1"
+        return DEFAULT_TEMPLATE_IDS[self.benchmark]
 
     def job_id(self) -> str:
         """Stable, readable identifier used in the frozen plan and the

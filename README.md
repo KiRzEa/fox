@@ -77,6 +77,64 @@ it can change a number: proven bit-identical, verified-equivalent
 reimplementation, deviation that can move a result, present only there,
 present only here, and still unverified.
 
+## Reproduction result (session 1, round r2)
+
+Measured on Kaggle 2x T4, LLaVA-1.5-7B fp16, seed 42, prompt byte-faithful to
+the release. POPE-adversarial n=3000, CHAIR n=500 images.
+
+**Absolute values against the paper's printed numbers:**
+
+| artefact | baseline (ours / paper) | Fox (ours / paper) |
+|---|---|---|
+| POPE-adv accuracy, sampling | 77.17 / 76.77 | 81.40 / 81.93 |
+| CHAIR_S, sampling | 56.80 / 57.60 | 49.60 / 46.40 |
+| CHAIR_I, sampling | 18.14 / 17.18 | 14.08 / 12.90 |
+| CHAIR_S, greedy | 49.20 / 50.90 | 46.20 / 42.60 |
+| CHAIR_I, greedy | 13.82 / 15.40 | 13.45 / 12.16 |
+
+Every baseline lands within 1.7 points, so the harness, the data and the
+decoding protocol are right. The method's own cells are within 0.53 on POPE
+and 1.2–3.6 too high on CHAIR.
+
+**What the paper actually claims is the gap, so that is what has to reproduce:**
+
+| artefact | our gap [95% CI] | paper's gap | verdict |
+|---|---|---|---|
+| POPE-adv accuracy, sampling | **+4.23** [+2.92, +5.47] | +5.16 | reproduces — CI covers it |
+| CHAIR_S, sampling | **−7.20** [−12.00, −2.40] | −11.20 | reproduces — CI covers it |
+| CHAIR_I, sampling | **−4.07** [−5.79, −2.32] | −4.28 | reproduces — CI covers it |
+| CHAIR_S, greedy | **−3.00** [−7.40, +1.40] | −8.30 | **fails** — gap not resolvable, CI excludes −8.30 |
+| CHAIR_I, greedy | **−0.37** [−1.74, +0.99] | −3.24 | **fails** — gap not resolvable, CI excludes −3.24 |
+
+POPE and CHAIR intervals are exact McNemar and paired bootstrap respectively,
+both on the same samples.
+
+**Under sampling, Fox reproduces on all three metrics. Under greedy decoding,
+its advantage disappears.** The second row of that pair is the sharp one:
+CHAIR_I under greedy has n=3896 mentions and resolves 2.24 points, so
+−0.37 [−1.74, +0.99] is a real null and not a power failure — it excludes the
+paper's −3.24. CHAIR_S at n=500 resolves only 8.85 points, so its null is
+weaker evidence.
+
+This is exactly what the mechanism analysis predicts. `reference_fuse`
+combines **unnormalised** logits with `alpha = 2`, so the fused vector carries
+roughly three times the scale of the original. Under nucleus sampling that
+sharpens the distribution — an implicit temperature drop. Under argmax it
+changes nothing, because scaling a vector does not move its maximum. The
+greedy control was built to separate "Fox grounds the model better" from "Fox
+samples less randomly", and it comes out on the second side.
+
+Note also that greedy decoding *alone* recovers most of what Fox claims to
+fix: the baseline improves from CHAIR_S 56.80 to 49.20 and CHAIR_I 18.14 to
+13.82 just by dropping the sampler, which is more than Fox buys under
+sampling.
+
+Still to run: POPE under greedy (Table 9a), the other two POPE splits, and the
+mechanism arms (`off`, `ulp_control`, `noise_control`, logit-dtype, the gamma
+sweep, `boost_visual`). Both rounds of session 1 are in
+[results/runs/](results/runs/) — `r1` ran before the released prompt was read
+and sits 5.13 points above the paper's POPE baseline; quote `r2`.
+
 ## The design that makes this safe
 
 The paper's mechanism is a *numerical* effect, so a reimplementation is
@@ -272,8 +330,8 @@ them all:
 
 ```bash
 python -m foxrepro.bench.plan ingest          # reads runs_inbox/, expands the zips
-python -m foxrepro.bench.evaluate --all
-python -m foxrepro.bench.report
+python -m foxrepro.bench.evaluate      # every run file in the runs dir
+python -m foxrepro.bench.report        # defaults to the faithful prompt arm
 ```
 
 `ingest` is idempotent, so re-ingesting a zip you already merged adds nothing,

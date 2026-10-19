@@ -335,6 +335,30 @@ class Paths:
     def coco_ann_dir(self) -> Path:
         return self.data_root / "annotations"
 
+    def coco_annotation(self, stem: str) -> Path:
+        """``instances_val2014`` / ``captions_val2014`` -> the file to read.
+
+        Two of this project's own tools disagreed on the name.
+        ``build_coco_subset.py`` writes ``<stem>_subset.json`` -- the 500-image
+        slice packed into the Kaggle tar -- while
+        ``fetch_images --with-annotations`` keeps the full
+        ``<stem>.json`` straight out of COCO's zip. Either is a valid input to
+        CHAIR, since the scorer indexes by image id and ignores the rest, so
+        this prefers the subset and falls back to the full file rather than
+        making the caller know which tool last ran.
+
+        Args:
+            stem: the file stem, without ``_subset`` and without ``.json``.
+
+        Returns:
+            The subset path if it exists, else the full path. The full path is
+            also what comes back when neither exists, so the caller's own
+            "missing file" error names something a user can act on.
+        """
+        subset = self.coco_ann_dir / f"{stem}_subset.json"
+        full = self.coco_ann_dir / f"{stem}.json"
+        return subset if subset.is_file() else full
+
     @property
     def pope_ann_dir(self) -> Path:
         """Directory holding ``coco_{random,popular,adversarial}.jsonl``.

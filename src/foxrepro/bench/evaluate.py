@@ -608,10 +608,12 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--pope-dir", type=Path, default=None,
                     help="cross-check POPE labels against the annotation files")
     ap.add_argument("--synonyms", type=Path, default=p.chair_synonyms)
+    # Prefers the 500-image subset that build_coco_subset.py packs, and falls
+    # back to the full file that `fetch_images --with-annotations` leaves.
     ap.add_argument("--instances", type=Path,
-                    default=p.coco_ann_dir / "instances_val2014_subset.json")
+                    default=p.coco_annotation("instances_val2014"))
     ap.add_argument("--captions", type=Path,
-                    default=p.coco_ann_dir / "captions_val2014_subset.json")
+                    default=p.coco_annotation("captions_val2014"))
     ap.add_argument("--gt-source", choices=("both", "instances", "captions"),
                     default="both")
     ap.add_argument("--tokenizer", choices=("regex", "nltk"), default="regex")

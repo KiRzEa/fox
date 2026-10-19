@@ -451,3 +451,101 @@ class TestReportPromptArms(unittest.TestCase):
         self.assertIn("Arms present", proc.stderr)
         self.assertIn("newline", proc.stderr)
         self.assertIn("--prompt-arm any", proc.stderr)
+
+
+class TestResolvedHyperparametersAreRecorded(unittest.TestCase):
+    """A fox record must say which gamma produced it.
+
+    ``--gamma`` defaults to None meaning "use the released value", and None is
+    what belongs in the provenance and in the variant hash, since "default" is
+    itself an arm. But the archive is the deliverable, and session 1's records
+    could not say that gamma was 10000.0 -- the report could only warn
+    "gamma = None: the intervention constant was not recorded". The resolved
+    values now ride in ``method_extra``, which is outside the variant hash so
+    adding them does not rename any run file.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.ws = make_workspace(self.root, n_images=4, n_per_image=2)
+        self.env = _with_src_on_path(dict(os.environ))
+        self.env.update({
+            "FOX_ENV": "local",
+            "FOX_PERSIST_ROOT": str(self.root / "persist"),
+            "FOX_LOCAL_ROOT": str(self.root / "local"),
+        })
+
+    def test_the_echo_run_carries_no_fox_hyperparameters(self) -> None:
+        """The dry-run method has none, and must not invent any."""
+        subprocess.run(
+            [sys.executable, "-m", "foxrepro.bench.generate", "--dry-run",
+             "--benchmark", "pope", "--split", "random", "--seed", "42",
+             "--dtype", "fp16",
+             "--pope-dir", str(self.ws["pope_dir"]),
+             "--images-dir", str(self.ws["images_dir"]),
+             "--chair-image-list", str(self.ws["chair_list"]),
+             "--runs-dir", str(self.ws["runs_dir"]), "--progress-every", "0"],
+            env=self.env, capture_output=True, text=True, timeout=300, check=True,
+        )
+        runs = sorted(Path(self.ws["runs_dir"]).glob("*.jsonl"))
+        self.assertTrue(runs)
+        rec = json.loads(runs[0].read_text().splitlines()[0])
+        self.assertNotIn(
+            "resolved_hyperparameters", rec.get("method_extra", {})
+        )
+
+    def test_a_method_with_resolved_hyperparameters_gets_them_recorded(self) -> None:
+        """Drives ``run()`` with a fake method, so no GPU and no checkpoint."""
+        from foxrepro.bench.generate import (
+            GenConfig, Method, MethodOutput, register_method, run,
+        )
+        from foxrepro.data.loaders import Sample
+
+        resolved = {"gamma": 10000.0, "ratio": 0.35, "tau_js": 0.15}
+
+        @register_method
+        class _Probe(Method):
+            name = "probe_resolved_hp"
+
+            def load(self) -> None:
+                return None
+
+            def describe(self):
+                d = dict(super().describe())
+                d["resolved_hyperparameters"] = dict(resolved)
+                return d
+
+            def generate(self, sample, prompt):
+                return MethodOutput(text="No", n_prompt_tokens=5,
+                                    n_gen_tokens=1, extra={"n_steps": 1})
+
+        img = self.root / "COCO_val2014_000000000042.jpg"
+        img.write_bytes(b"x")
+        samples = [
+            Sample(sample_id=f"pope/random/q{i:07d}", image_id=42,
+                   image_path=img, benchmark="pope", split="random",
+                   question="Is there a dog in the image?", label="no",
+                   extra={})
+            for i in range(3)
+        ]
+        cfg = GenConfig(
+            method="probe_resolved_hp", benchmark="pope", split="random",
+            seed=42, dtype="fp16", model_id="fake/llava",
+            prompt_template_id="pope_v0_raw", max_new_tokens=1,
+        )
+        out = self.root / "probe.jsonl"
+        run(cfg, samples, out, progress_every=0, fsync=False)
+
+        recs = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+        self.assertEqual(len(recs), 3)
+        for rec in recs:
+            # gamma stays None in the provenance and therefore in the variant
+            # hash; the resolved value lives alongside it.
+            self.assertIsNone(rec["gamma"])
+            self.assertEqual(
+                rec["method_extra"]["resolved_hyperparameters"], resolved
+            )
+            # the method's own per-sample extras must survive the merge
+            self.assertEqual(rec["method_extra"]["n_steps"], 1)

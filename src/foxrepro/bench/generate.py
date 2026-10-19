@@ -809,6 +809,13 @@ def run(
     try:
         method.load()
         summary["method_describe"] = method.describe()
+        # The CONFIGURED hyperparameters are None whenever the released
+        # defaults were used, and None is what lands in the provenance and in
+        # the variant hash -- correctly, since "default" is one arm. But a
+        # record that cannot say which gamma produced it is not much of an
+        # archive, so the RESOLVED values ride along in method_extra, which is
+        # free-form and outside the variant hash.
+        resolved = summary["method_describe"].get("resolved_hyperparameters")
         for i, sample in enumerate(pending, start=1):
             if stop.stop:
                 break
@@ -828,8 +835,11 @@ def run(
                 "n_gen_tokens": out.n_gen_tokens,
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             })
-            if out.extra:
-                record["method_extra"] = out.extra
+            extra = dict(out.extra) if out.extra else {}
+            if resolved:
+                extra["resolved_hyperparameters"] = resolved
+            if extra:
+                record["method_extra"] = extra
             if sample.label is not None:
                 record["label"] = sample.label
             writer.write(record)

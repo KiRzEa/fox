@@ -14,7 +14,7 @@
 # finished job, so a cut session loses at most the job in flight. Download each
 # zip into runs_inbox/ locally, then merge them with one command:
 #   python3 -m foxrepro.bench.plan ingest
-#   python3 -m foxrepro.bench.evaluate --all && python3 -m foxrepro.bench.report
+#   python3 -m foxrepro.bench.evaluate && python3 -m foxrepro.bench.report
 #
 # Resumable: relaunch the identical command. Completed samples are skipped, and
 # a job the previous session left half-done is continued, not restarted,

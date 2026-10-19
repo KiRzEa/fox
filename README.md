@@ -234,9 +234,9 @@ pipeline" to "one ~50-sample oracle run".
 ## Reproducing across sessions
 
 The paper prints 15 tables and 22 figures and this hardware cannot reach all of
-them; `foxrepro/bench/plan.py` records which, why, and what to run next. **53
-jobs, ~87 GPU-hours** — about three weeks of Kaggle's 30/week quota, or five
-concurrent sessions of ~17.4 h each.
+them; `foxrepro/bench/plan.py` records which, why, and what to run next. **60
+jobs, ~96 GPU-hours** — about three weeks of Kaggle's 30/week quota, split into
+**11 sessions** of under 10 h each (the single-session wall).
 
 Freeze the split once, locally, and commit it:
 
@@ -285,7 +285,7 @@ project:
 - **The split is frozen to a file**, not recomputed per session. Otherwise
   editing the plan source silently reassigns work and sessions overlap or skip.
 - **Jobs are cost-balanced** by longest-processing-time-first. Round-robin over
-  53 jobs costing 0.2–2.3 h leaves one session with twice the work.
+  60 jobs costing 0.2–2.3 h leaves one session with twice the work.
 - **Reassignment is still safe.** Resume is keyed on the run file, which is
   derived from the configuration and not the session, so a job half-done by
   session 2 and later moved to session 3 is continued rather than restarted.
@@ -384,8 +384,8 @@ that failure is detectable after the fact.
 | POPE annotations (3000 × 3 splits, 500 images, 50/50 balanced) | shipped in `assets/` |
 | Kaggle bootstrap, host probe, notebook cells | done; host measured (2x T4, py3.13, torch 2.11, transformers 5.16.1) |
 | COCO images | fetched directly per-id (~100 MB for POPE) — no 6.2 GB zip |
-| Reproduction plan | 53 jobs, ~87 GPU-h, split across sessions by one flag |
-| Total | **294 tests** |
+| Reproduction plan | 60 jobs, ~96 GPU-h, 11 sessions, selected by one flag |
+| Total | **335 tests** |
 | Deviations from the release | [docs/DEVIATIONS.md](docs/DEVIATIONS.md) — every difference, classified by whether it can change a number, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
 | `fox/attention.py` — `AttentionInterface` wiring + dual-branch decode loop | done, 18 tests |
 | `sampling`, `fox`, `vcd` | done, 21 tests against a fake model |

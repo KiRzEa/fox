@@ -254,20 +254,39 @@ def _pope_splits() -> Sequence[str]:
 #: The paper's Tables 1 and 2 are "the best results averaged over 10
 #: independent runs" (C.2, verbatim), with significance from "a two-sided
 #: t-test (p < 0.05)" -- and no table anywhere reports a standard deviation,
-#: so that test cannot be checked. One seed per method here would reproduce
+#: so that test cannot be checked. One seed per approach here would reproduce
 #: the same weakness: an interval computed from a single run captures only
-#: which ITEMS are hard, never which GENERATION you happened to draw, and is
-#: therefore too narrow by an unknown amount.
+#: which ITEMS are hard, never which GENERATION was drawn, and is therefore
+#: too narrow by an unknown amount.
 #:
-#: Ten for the two headline comparisons -- POPE-adversarial and CHAIR -- so
-#: "best of 10" can be matched on its own terms as well as by the mean. Three
-#: for breadth. All start at 42, the seed session 1 already spent.
-#:
-#: The sweeps below were trimmed to pay for this: two gamma values instead of
-#: four, one boost_visual delta instead of three, two alphas instead of three,
-#: one VCD seed instead of three. Those refine a result; seeds establish one.
-SEEDS_HEADLINE = (42, 43, 44, 45, 46, 47, 48, 49, 50, 51)
+#: Ten everywhere a comparison is reported under sampling, so the mean gap has
+#: a real t-interval and "best of 10" can also be matched on its own terms.
+#: Three where an arm is informative but not load-bearing. All start at 42,
+#: the seed session 1 already spent, so none of its work is orphaned.
+SEEDS_FULL = (42, 43, 44, 45, 46, 47, 48, 49, 50, 51)
 SEEDS_BREADTH = (42, 43, 44)
+
+#: Kept as an alias: ``SEEDS_HEADLINE`` was the name before the replication
+#: was widened past the two headline arms.
+SEEDS_HEADLINE = SEEDS_FULL
+
+#: Arms replicated ten times on POPE-adversarial under sampling. Each is a
+#: separate *approach*, so each needs its own interval rather than borrowing
+#: fox's:
+#:
+#: ``sampling``       the baseline every gap is measured against
+#: ``fox``            the method as released
+#: ``off``            the fusion with the intervention disabled -- isolates
+#:                    how much of the gain is the two-branch fusion alone
+#: ``ulp_control``    the requantisation applied with no shift at all -- if
+#:                    this matches ``fox``, the mechanism is the fp16 cast
+#:
+#: The remaining arms (``as_described``, ``noise_control``, ``boost_visual``,
+#: the logit-dtype arms, the gamma sweep) are run under greedy instead, where
+#: argmax is deterministic and one run is the complete answer. For the
+#: mechanism question -- does the shift change the output at all -- that is
+#: both cheaper and a sharper instrument than ten noisy sampling runs.
+POPE_SEEDED_MODES = ("off", "ulp_control")
 
 
 def _build_plan() -> List[Job]:
@@ -284,15 +303,15 @@ def _build_plan() -> List[Job]:
        deterministic and the paper's Table 9 is explicitly single-run ("we
        omit averaged scores"), so this comparison needs no seeds on either
        side -- the cheapest decisive evidence in the whole plan.
-    2. **Seed replication of the sampling headline.** Where the paper's claim
-       does hold, one seed is not an argument.
-    3. **The mechanism arms, under greedy.** The question is whether the -gamma
-       shift changes the output at all. Greedy answers it deterministically, so
-       these cost one run each instead of ten.
-    4. **Breadth**: the other POPE splits, and the mechanism arms under
-       sampling for the two controls that carry the account.
-    5. **Sweeps and VCD**, last, because they refine a result rather than
-       establish one.
+    2. **Ten seeds on the two arms compared directly to Tables 1 and 2.**
+    3. **Ten seeds on the two controls that decide the mechanism**, under the
+       paper's own decoding, so their intervals are comparable to fox's.
+    4. **The remaining mechanism arms, under greedy**, one run each.
+    5. **Breadth**: the other POPE splits, the prompt and system-prompt arms,
+       and the sweeps.
+    6. **The VCD-noise arm**, last and at three seeds, because it is not VCD
+       proper (see docs/DEVIATIONS.md) and so cannot be put against the
+       paper's VCD row whatever its interval.
     """
     jobs: List[Job] = []
 
@@ -318,62 +337,67 @@ def _build_plan() -> List[Job]:
                         seed=997, limit=50,
                         note="same inputs, different seed: outputs must match"))
 
-    # ---- Tier 2: seed replication, sampling ------------------------------ #
-    for seed in SEEDS_HEADLINE:
+    # ---- Tier 2: ten seeds, the arms the paper prints -------------------- #
+    for seed in SEEDS_FULL:
         for method in ("sampling", "fox"):
             jobs.append(Job("table1", method, "pope", "adversarial",
                             seed=seed, note="POPE accuracy (T1) and F1 (T8)"))
-    # CHAIR_S has n=500 captions and resolves only 8.85 points. That is ITEM
-    # variance, which averaging seeds over the same 500 images cannot shrink --
-    # only more images would, and that would leave the paper's protocol. What
-    # the seeds do buy is the generation component of the PAIRED gap, and the
-    # ability to compare against a "best of 10" on its own terms. CHAIR is
-    # also where the abstract's headline lives ("29.1% over SID" is CHAIR_S),
-    # so it gets the same ten.
-    for seed in SEEDS_HEADLINE:
+    # CHAIR_S has n=500 captions and resolves only 8.85 points on its own.
+    # That is ITEM variance, which averaging seeds over the same 500 images
+    # cannot shrink -- only more images would, and that would leave the
+    # paper's protocol. What the seeds do shrink is the generation component
+    # of the PAIRED gap, where the item difficulty largely cancels. CHAIR is
+    # also where the abstract's headline lives ("29.1% over SID" is CHAIR_S).
+    for seed in SEEDS_FULL:
         for method in ("sampling", "fox"):
             jobs.append(Job("table2", method, "chair", "val2014_500",
                             seed=seed, note="CHAIR_S / CHAIR_I"))
 
-    # ---- Tier 3: the mechanism audit, under greedy, 1 seed --------------- #
-    # off          : the fusion without the intervention
-    # as_described : Appendix B's version, biasing image keys only
-    # ulp_control  : the requantisation, explicitly, with no shift at all
-    # noise_control: matched-magnitude noise instead of a shift
-    # boost_visual : the intervention the paper argues from and never runs
-    for mode in ("off", "as_described", "ulp_control", "noise_control"):
+    # ---- Tier 3: ten seeds on the controls that decide the mechanism ----- #
+    for mode in POPE_SEEDED_MODES:
+        for seed in SEEDS_FULL:
+            jobs.append(Job("controls", "fox", "pope", "adversarial",
+                            mode=mode, seed=seed,
+                            note=f"mode={mode}, sampling, seeded"))
+    # Three on CHAIR: enough for a direction with an interval, where ten would
+    # cost 30 h to refine a question the greedy arms already answer.
+    for mode in POPE_SEEDED_MODES:
+        for seed in SEEDS_BREADTH:
+            jobs.append(Job("controls", "fox", "chair", "val2014_500",
+                            mode=mode, seed=seed,
+                            note=f"mode={mode}, sampling, seeded"))
+
+    # ---- Tier 4: the rest of the mechanism audit, under greedy ----------- #
+    for mode in ("as_described", "noise_control"):
         for bench, split in (("pope", "adversarial"), ("chair", "val2014_500")):
             jobs.append(Job("controls", "fox", bench, split, mode=mode,
                             decoding="greedy", note=f"mode={mode}, greedy"))
+    # boost_visual is this repo's own arm: the intervention the paper argues
+    # from and never performs. Small delta, because it is an attention bias
+    # meant to be felt, not a precision artifact.
+    for bench, split in (("pope", "adversarial"), ("chair", "val2014_500")):
+        jobs.append(Job("boost_visual", "fox", bench, split,
+                        mode="boost_visual", gamma=4.0, decoding="greedy",
+                        note="amplify visual attention, delta=4"))
     for ld in ("fp32", "bf16"):
         for bench, split in (("pope", "adversarial"), ("chair", "val2014_500")):
             jobs.append(Job("dtype_arms", "fox", bench, split, logit_dtype=ld,
                             decoding="greedy",
                             note=f"logit_dtype={ld}, greedy"))
-    # fp16 ULP at these magnitudes is 0.0625 / 0.5 / 8 / 32, a 512x span. A
-    # response that tracks ULP rather than gamma is the signature of the
-    # requantisation account. 1e5 overflows fp16 and is out.
-    # Two values, not four: 1e2 and 1e4 are ULP 0.0625 and 8.0, a 128x span,
-    # which is the whole point. 1e3 and 6e4 only fill in the curve.
+    # fp16 ULP at 1e2 and 1e4 is 0.0625 and 8.0, a 128x span. A response that
+    # tracks ULP rather than gamma is the signature of the requantisation
+    # account. 1e5 overflows fp16 and is out.
     for gamma in (1e2, 1e4):
         jobs.append(Job("gamma_sweep", "fox", "chair", "val2014_500",
                         gamma=gamma, decoding="greedy",
                         note=f"gamma={gamma:g}, greedy"))
-    jobs.append(Job("boost_visual", "fox", "chair", "val2014_500",
-                    mode="boost_visual", gamma=4.0, decoding="greedy",
-                    note="amplify visual attention, delta=4"))
 
-    # ---- Tier 4: breadth ------------------------------------------------- #
+    # ---- Tier 5: breadth ------------------------------------------------- #
     for seed in SEEDS_BREADTH:
         for split in ("random", "popular"):
             for method in ("sampling", "fox"):
                 jobs.append(Job("table1", method, "pope", split, seed=seed,
                                 note="POPE accuracy (T1) and F1 (T8)"))
-    # The two controls that carry the account, under the paper's own decoding.
-    for mode in ("off", "ulp_control"):
-        for seed in SEEDS_BREADTH:
-            jobs.append(Job("controls", "fox", "pope", "adversarial",
-                            mode=mode, seed=seed, note=f"mode={mode}, sampling"))
     # Does the paper's shortcut survive without a system prompt to anchor it?
     for method in ("sampling", "fox"):
         jobs.append(Job("system_prompt", method, "pope", "adversarial",
@@ -389,8 +413,6 @@ def _build_plan() -> List[Job]:
     ):
         jobs.append(Job("prompt_ablation", "sampling", "pope", "adversarial",
                         decoding="greedy", note=f"faithful + {label}", **over))
-
-    # ---- Tier 5: sweeps and VCD ------------------------------------------ #
     for alpha in (1.0, 4.0):        # 2.0 is the default, already covered
         jobs.append(Job("table7", "fox", "pope", "adversarial", alpha=alpha,
                         decoding="greedy", note=f"alpha={alpha:g}"))
@@ -401,12 +423,16 @@ def _build_plan() -> List[Job]:
         jobs.append(Job("fig9", "fox", "pope", "adversarial", tau_js=tau,
                         limit=500, decoding="greedy",
                         note=f"tau_js={tau:g}, 500 samples"))
+
+    # ---- Tier 6: the VCD-noise arm --------------------------------------- #
     # Labelled vcd-noise-fox-fusion, not VCD: what this repo can run is VCD's
-    # noised branch inside Fox's fusion. See docs/DEVIATIONS.md.
-    jobs.append(Job("table1", "vcd", "pope", "adversarial",
-                    note="VCD-noise arm, not VCD proper"))
-    jobs.append(Job("table2", "vcd", "chair", "val2014_500",
-                    note="VCD-noise arm, not VCD proper"))
+    # noised branch inside Fox's fusion, so its row cannot be put against the
+    # paper's VCD row however many seeds it gets. Three, and last.
+    for seed in SEEDS_BREADTH:
+        jobs.append(Job("table1", "vcd", "pope", "adversarial", seed=seed,
+                        note="VCD-noise arm, not VCD proper"))
+        jobs.append(Job("table2", "vcd", "chair", "val2014_500", seed=seed,
+                        note="VCD-noise arm, not VCD proper"))
 
     return jobs
 
@@ -606,25 +632,28 @@ def partition_by_priority(
     for job in jobs:
         groups.setdefault(pair_key(job), []).append(job)
 
+    # First-fit, in plan order: each group goes into the earliest session it
+    # fits in. Closing a session as soon as the next group overflows it, which
+    # is the obvious alternative, left three hours idle whenever a 2.65 h CHAIR
+    # pair followed a nearly full session -- first-fit backfills those with
+    # later groups that do fit, while early groups still take early sessions,
+    # so priority survives.
     budget_s = budget_hours * 3600
     sessions: List[List[Job]] = []
-    current: List[Job] = []
-    spent = 0.0
+    loads: List[float] = []
     for group in groups.values():
         cost = sum(j.est_seconds() for j in group)
-        if current and spent + cost > budget_s:
-            sessions.append(current)
-            current, spent = [], 0.0
-        current.extend(group)
-        spent += cost
-        # A single group larger than the budget cannot be split without
-        # splitting a comparison, so it gets a session of its own and the
-        # caller is told by the printed estimate rather than silently.
-        if spent >= budget_s:
-            sessions.append(current)
-            current, spent = [], 0.0
-    if current:
-        sessions.append(current)
+        for i, load in enumerate(loads):
+            if load + cost <= budget_s:
+                sessions[i].extend(group)
+                loads[i] = load + cost
+                break
+        else:
+            # A single group over budget cannot be split without splitting a
+            # comparison, so it gets a session of its own and the printed
+            # estimate says so rather than the overrun being silent.
+            sessions.append(list(group))
+            loads.append(cost)
     return sessions
 
 

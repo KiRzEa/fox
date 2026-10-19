@@ -292,9 +292,20 @@ pipeline" to "one ~50-sample oracle run".
 ## Reproducing across sessions
 
 The paper prints 15 tables and 22 figures and this hardware cannot reach all of
-them; `foxrepro/bench/plan.py` records which, why, and what to run next. **60
-jobs, ~96 GPU-hours** — about three weeks of Kaggle's 30/week quota, split into
-**11 sessions** of under 10 h each (the single-session wall).
+them; `foxrepro/bench/plan.py` records which, why, and what to run next. **117
+jobs, ~104 GPU-hours remaining** over **12 sessions** of under 9 h each (the
+single-session wall is 10).
+
+Most of that is seed replication, and it is not optional. Appendix C.2 reports
+"the best results averaged over 10 independent runs" with "a two-sided t-test
+(p < 0.05)", while no table in the paper prints a standard deviation. An
+interval computed from a single run sees only which **items** were hard; with
+`do_sample=True` the gap also moves with the **generation drawn**, and that
+component is invisible to one run. So every arm that is compared under
+sampling gets ten seeds, and `bench/report.py` puts a paired Student-t
+interval on the mean of the per-seed gaps. The greedy arms get one seed each
+and need no more: argmax is deterministic, and the paper's Table 9 is
+single-run for the same reason ("we omit averaged scores", C.7).
 
 Freeze the split once, locally, and commit it:
 
@@ -346,8 +357,15 @@ project:
 
 - **The split is frozen to a file**, not recomputed per session. Otherwise
   editing the plan source silently reassigns work and sessions overlap or skip.
-- **Jobs are cost-balanced** by longest-processing-time-first. Round-robin over
-  60 jobs costing 0.2–2.3 h leaves one session with twice the work.
+- **Sessions are filled in plan order**, first-fit against the budget, so
+  session 1 is the decisive work and stopping after any session leaves a
+  coherent result. Longest-processing-time-first minimises makespan but
+  scatters the tiers across all 12 sessions, which makes no prefix of them
+  answer anything; it is still available as `--order balanced`.
+- **A baseline is never separated from its method.** The unit being packed is
+  every job sharing a configuration apart from `--method`, seed included, so
+  no session holds a baseline without its method and no gap is computed
+  between seed 43's method and seed 42's baseline.
 - **Reassignment is still safe.** Resume is keyed on the run file, which is
   derived from the configuration and not the session, so a job half-done by
   session 2 and later moved to session 3 is continued rather than restarted.
@@ -446,8 +464,8 @@ that failure is detectable after the fact.
 | POPE annotations (3000 × 3 splits, 500 images, 50/50 balanced) | shipped in `assets/` |
 | Kaggle bootstrap, host probe, notebook cells | done; host measured (2x T4, py3.13, torch 2.11, transformers 5.16.1) |
 | COCO images | fetched directly per-id (~100 MB for POPE) — no 6.2 GB zip |
-| Reproduction plan | 60 jobs, ~96 GPU-h, 11 sessions, selected by one flag |
-| Total | **335 tests** |
+| Reproduction plan | 117 jobs, ~104 GPU-h remaining, 12 sessions, selected by one flag; the sampling arms replicated over 10 seeds |
+| Total | **372 tests** |
 | Deviations from the release | [docs/DEVIATIONS.md](docs/DEVIATIONS.md) — every difference, classified by whether it can change a number, green on macOS/arm64 + torch 2.8 + transformers 4.57.6 **and** Kaggle/x86_64 + torch 2.11 + transformers 5.16.1 |
 | `fox/attention.py` — `AttentionInterface` wiring + dual-branch decode loop | done, 18 tests |
 | `sampling`, `fox`, `vcd` | done, 21 tests against a fake model |

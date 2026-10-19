@@ -129,6 +129,33 @@ class RunResult:
         return int(self.prov["seed"])
 
     @property
+    def arm(self) -> str:
+        """The approach, not just the method name.
+
+        Every control is ``method="fox"`` with a different ``mode``, and the
+        dtype and gamma arms differ only in a provenance field. Keying on
+        ``method`` alone would collapse all of them into one bucket, so each
+        comparison needs the whole arm identity. The label is built to read
+        like the flags that produced it.
+        """
+        bits = [self.method]
+        mode = self.prov.get("mode")
+        if self.method == "fox" and mode and mode != "as_implemented":
+            bits.append(str(mode))
+        ld = self.prov.get("logit_dtype")
+        if ld and ld != "native":
+            bits.append(f"ld={ld}")
+        sd = self.prov.get("softmax_dtype")
+        if sd and sd != "fp32":
+            bits.append(f"sm={sd}")
+        for name, key in (("g", "gamma"), ("k", "k"), ("tau", "tau_js"),
+                          ("alpha", "alpha"), ("beta", "beta")):
+            v = self.prov.get(key)
+            if v is not None:
+                bits.append(f"{name}={float(v):g}")
+        return " ".join(bits)
+
+    @property
     def prompt_arm(self) -> Dict[str, str]:
         """The prompt fields that make two runs of one job incomparable.
 
@@ -223,15 +250,19 @@ def _metric_point(res: "RunResult", key: str) -> float:
 def group_by_seed(
     results: Sequence[RunResult],
 ) -> Dict[Tuple[str, str, str, str], Dict[int, RunResult]]:
-    """``(benchmark, split, decoding, method) -> {seed: result}``.
+    """``(benchmark, split, decoding, arm) -> {seed: result}``.
 
     The seed is a first-class axis here rather than a duplicate to be
     rejected, because replicating a run across seeds is the only way to see
     the generation variance at all.
+
+    The fourth element is :attr:`RunResult.arm`, not the method: ``fox
+    --mode off`` and ``fox --mode ulp_control`` are different approaches that
+    share a method name, and keying on the name would merge them.
     """
     out: Dict[Tuple[str, str, str, str], Dict[int, RunResult]] = {}
     for r in results:
-        key = (r.benchmark, r.split, r.decoding, r.method)
+        key = (r.benchmark, r.split, r.decoding, r.arm)
         bucket = out.setdefault(key, {})
         if r.seed in bucket:
             raise ValueError(
@@ -658,25 +689,30 @@ def render_seed_section(results: Sequence[RunResult], baseline: str,
               "| " + " | ".join("---" for _ in header) + " |"]
 
     any_row = False
-    for (bench, split, decoding, method) in sorted(grouped):
-        if method == baseline:
+    for (bench, split, decoding, arm) in sorted(grouped):
+        if arm == baseline:
             continue
         base_runs = grouped.get((bench, split, decoding, baseline))
         if not base_runs:
             continue
-        runs = grouped[(bench, split, decoding, method)]
+        runs = grouped[(bench, split, decoding, arm)]
         for key, label, higher in SEED_METRICS.get(bench, ()):
             try:
                 cmp_ = seed_level_comparison(
                     {sd: _metric_point(r, key) for sd, r in base_runs.items()},
                     {sd: _metric_point(r, key) for sd, r in runs.items()},
-                    label_a=baseline, label_b=method,
+                    label_a=baseline, label_b=arm,
                     confidence=confidence, higher_is_better=higher,
                 )
             except ValueError:
                 continue
             any_row = True
-            pg = paper_gap(bench, split, decoding, key, baseline, method)
+            # Only a bare method appears in the paper. "fox off" and
+            # "fox ld=bf16" are this repo's own arms, so there is no paper
+            # value to compare them to and the column is left empty rather
+            # than filled with fox's.
+            pg = (paper_gap(bench, split, decoding, key, baseline, arm)
+                  if " " not in arm else None)
             if cmp_.n_seeds < 2:
                 pval = "-"
                 if decoding == "greedy":
@@ -703,7 +739,7 @@ def render_seed_section(results: Sequence[RunResult], baseline: str,
                     verdict = "**excludes paper**"
             lines.append("| " + " | ".join([
                 f"{bench}/{split} ({decoding})",
-                f"`{method}`",
+                f"`{arm}`",
                 label,
                 str(cmp_.n_seeds),
                 f"{cmp_.mean_a:.2f}+-{cmp_.sd_a:.2f}",

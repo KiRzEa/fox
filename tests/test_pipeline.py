@@ -549,3 +549,131 @@ class TestResolvedHyperparametersAreRecorded(unittest.TestCase):
             )
             # the method's own per-sample extras must survive the merge
             self.assertEqual(rec["method_extra"]["n_steps"], 1)
+
+
+class TestPerApproachStatistics(unittest.TestCase):
+    """Every arm is a separate approach and needs its own interval.
+
+    All five control arms are ``method="fox"`` with a different ``mode``, and
+    the dtype and gamma arms differ only in a provenance field. Grouping on
+    the method name merges them -- which, with seed replication, surfaces as
+    "two metrics files for ... seed 42" and no report at all.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.reports = Path(self._tmp.name) / "reports"
+        self.reports.mkdir()
+
+    def _write(self, name: str, method: str, accuracy: float, seed: int = 42,
+               **prov_extra: object) -> None:
+        n = 3000
+        k = int(round(accuracy * n))
+        prov = {
+            "method": method, "benchmark": "pope", "split": "adversarial",
+            "seed": seed, "dtype": "fp16", "decoding": "sampling",
+            "system_prompt_id": "llava_v1", "wrapper_id": "released",
+            "prompt_template_id": "pope_v0_raw", "mode": "as_implemented",
+            "logit_dtype": "native", "softmax_dtype": "fp32",
+            "gamma": None, "k": None, "tau_js": None, "alpha": None,
+            "beta": None, "pope_parser": "released",
+        }
+        prov.update(prov_extra)
+        met = {
+            "benchmark": "pope", "n_samples": n, "n_unparsed": 0,
+            "accuracy": {"name": "pope_accuracy", "point": accuracy,
+                         "ci_lo": accuracy - 0.014, "ci_hi": accuracy + 0.014,
+                         "n": n, "successes": k, "confidence": 0.95,
+                         "interval_method": "wilson"},
+            "f1": {"name": "pope_f1", "point": accuracy, "ci_lo": accuracy - 0.02,
+                   "ci_hi": accuracy + 0.02, "n": n, "confidence": 0.95,
+                   "interval_method": "bootstrap"},
+            "yes_ratio": {"name": "pope_yes_ratio", "point": 0.5, "ci_lo": 0.48,
+                          "ci_hi": 0.52, "n": n, "confidence": 0.95,
+                          "interval_method": "wilson"},
+            "confusion": {"tp": k // 2, "fp": (n - k) // 2,
+                          "fn": (n - k) - (n - k) // 2, "tn": k - k // 2},
+            "denominators": {"accuracy": n, "precision": n // 2,
+                             "recall": n // 2, "f1": n, "yes_ratio": n,
+                             "n_ground_truth_yes": n // 2,
+                             "n_ground_truth_no": n // 2},
+        }
+        (self.reports / name).write_text(
+            json.dumps({"provenance": prov, "metrics": met}), encoding="utf-8")
+
+    def test_fox_modes_are_separate_arms_not_a_collision(self) -> None:
+        from foxrepro.bench.report import group_by_seed, load_results
+
+        self._write("a.metrics.json", "fox", 0.814)
+        self._write("b.metrics.json", "fox", 0.780, mode="off")
+        self._write("c.metrics.json", "fox", 0.812, mode="ulp_control")
+        grouped = group_by_seed(load_results(self.reports))
+        arms = sorted(k[3] for k in grouped)
+        self.assertEqual(arms, ["fox", "fox off", "fox ulp_control"])
+
+    def test_the_dtype_and_gamma_arms_are_distinguished_too(self) -> None:
+        from foxrepro.bench.report import group_by_seed, load_results
+
+        self._write("a.metrics.json", "fox", 0.814)
+        self._write("b.metrics.json", "fox", 0.770, logit_dtype="fp32")
+        self._write("c.metrics.json", "fox", 0.800, gamma=100.0)
+        arms = sorted(k[3] for k in group_by_seed(load_results(self.reports)))
+        self.assertEqual(arms, ["fox", "fox g=100", "fox ld=fp32"])
+
+    def test_a_real_duplicate_still_raises(self) -> None:
+        """Same arm, same seed, twice: that is a stale file, not an arm."""
+        from foxrepro.bench.report import group_by_seed, load_results
+
+        self._write("a.metrics.json", "fox", 0.814)
+        self._write("b.metrics.json", "fox", 0.820)
+        with self.assertRaises(ValueError) as ctx:
+            group_by_seed(load_results(self.reports))
+        self.assertIn("seed 42", str(ctx.exception))
+
+    def test_every_arm_gets_its_own_row_and_interval(self) -> None:
+        from foxrepro.bench.report import load_results, render_seed_section
+
+        seeds = list(range(42, 47))
+        for i, sd in enumerate(seeds):
+            self._write(f"base{sd}.metrics.json", "sampling",
+                        0.770 + 0.001 * i, seed=sd)
+            self._write(f"fox{sd}.metrics.json", "fox",
+                        0.814 + 0.001 * i, seed=sd)
+            self._write(f"off{sd}.metrics.json", "fox",
+                        0.772 + 0.001 * i, seed=sd, mode="off")
+        text = render_seed_section(load_results(self.reports), "sampling")
+        self.assertIn("`fox`", text)
+        self.assertIn("`fox off`", text)
+        self.assertIn("5", text)                      # the seed count
+        # fox gains ~4.4 points consistently; off gains ~0.2 and must not be
+        # reported as resolved.
+        fox_row = next(l for l in text.splitlines()
+                       if "| `fox` |" in l and "accuracy" in l)
+        off_row = next(l for l in text.splitlines()
+                       if "| `fox off` |" in l and "accuracy" in l)
+        self.assertIn("+4.40", fox_row)
+        self.assertIn("+0.20", off_row)
+
+    def test_only_a_bare_method_gets_a_paper_column(self) -> None:
+        """`fox off` is this repo's arm; the paper prints no value for it.
+
+        Filling that column with fox's would invent a claim the paper never
+        made, so it is left empty.
+        """
+        from foxrepro.bench.report import load_results, render_seed_section
+
+        for sd in (42, 43):
+            self._write(f"base{sd}.metrics.json", "sampling", 0.77, seed=sd)
+            self._write(f"fox{sd}.metrics.json", "fox", 0.814, seed=sd)
+            self._write(f"off{sd}.metrics.json", "fox", 0.772, seed=sd,
+                        mode="off")
+        text = render_seed_section(load_results(self.reports), "sampling")
+        fox_row = next(l for l in text.splitlines()
+                       if "| `fox` |" in l and "accuracy" in l)
+        off_row = next(l for l in text.splitlines()
+                       if "| `fox off` |" in l and "accuracy" in l)
+        self.assertIn("+5.16", fox_row)        # the paper's POPE-adv gap
+        cells = [c.strip() for c in off_row.split("|")]
+        self.assertIn("-", cells)              # paper gap left empty
+        self.assertNotIn("+5.16", off_row)

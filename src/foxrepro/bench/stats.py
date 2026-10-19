@@ -67,6 +67,10 @@ __all__ = [
     "required_n_for_gap",
     "resolvable_gap",
     "power_table",
+    "student_t_sf",
+    "t_for_confidence",
+    "SeedComparison",
+    "seed_level_comparison",
 ]
 
 _ND = NormalDist()
@@ -697,3 +701,291 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_main())
+
+
+# --------------------------------------------------------------------------- #
+# across seeds
+# --------------------------------------------------------------------------- #
+# Everything above this line quantifies one source of variation: which ITEMS
+# landed in the sample. A run generated with ``do_sample=True`` carries a
+# second one -- which GENERATION was drawn -- and no interval computed from a
+# single run can see it. Reporting such an interval as if it covered both is
+# the specific weakness this section exists to remove, and it is also the
+# paper's: Appendix C.2 claims "a two-sided t-test (p < 0.05)" over "10
+# independent runs" while no table reports a standard deviation.
+#
+# Student's t is needed because the number of seeds is small, so the normal
+# quantile is too optimistic: at 10 seeds the two-sided 95% multiplier is
+# 2.262 rather than 1.960, and at 3 seeds it is 4.303. stats.py is stdlib-only
+# on purpose (see requirements-cpu.lock), so the distribution is implemented
+# here rather than imported from scipy.
+
+
+def _betacf(a: float, b: float, x: float, iters: int = 300,
+            eps: float = 3e-16) -> float:
+    """Continued fraction for the incomplete beta function (Lentz's method)."""
+    tiny = 1e-300
+    qab, qap, qam = a + b, a + 1.0, a - 1.0
+    c = 1.0
+    d = 1.0 - qab * x / qap
+    if abs(d) < tiny:
+        d = tiny
+    d = 1.0 / d
+    h = d
+    for m in range(1, iters + 1):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        if abs(d) < tiny:
+            d = tiny
+        c = 1.0 + aa / c
+        if abs(c) < tiny:
+            c = tiny
+        d = 1.0 / d
+        h *= d * c
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        if abs(d) < tiny:
+            d = tiny
+        c = 1.0 + aa / c
+        if abs(c) < tiny:
+            c = tiny
+        d = 1.0 / d
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < eps:
+            return h
+    raise RuntimeError("incomplete beta did not converge")
+
+
+def _betainc(a: float, b: float, x: float) -> float:
+    """Regularised incomplete beta ``I_x(a, b)``."""
+    if not 0.0 <= x <= 1.0:
+        raise ValueError(f"x must be in [0,1], got {x}")
+    if x in (0.0, 1.0):
+        return x
+    lbeta = (math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
+             + a * math.log(x) + b * math.log1p(-x))
+    front = math.exp(lbeta)
+    if x < (a + 1.0) / (a + b + 2.0):
+        return front * _betacf(a, b, x) / a
+    return 1.0 - math.exp(
+        math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
+        + b * math.log1p(-x) + a * math.log(x)
+    ) * _betacf(b, a, 1.0 - x) / b
+
+
+def student_t_sf(t: float, df: float) -> float:
+    """Two-sided tail probability of Student's t.
+
+    ``student_t_sf(2.262, 9)`` is 0.05 to three decimals, and
+    ``student_t_sf(1.96, 1e9)`` approaches the normal 0.05.
+
+    Args:
+        t: the statistic; the sign is ignored.
+        df: degrees of freedom, > 0.
+
+    Returns:
+        ``P(|T| >= |t|)``.
+    """
+    if df <= 0:
+        raise ValueError("df must be > 0")
+    t = abs(float(t))
+    if t == 0.0:
+        return 1.0
+    if math.isinf(t):
+        return 0.0
+    return _betainc(df / 2.0, 0.5, df / (df + t * t))
+
+
+def t_for_confidence(confidence: float = 0.95, df: float = 1.0) -> float:
+    """Two-sided Student-t quantile, by bisection on :func:`student_t_sf`.
+
+    Args:
+        confidence: coverage in (0, 1).
+        df: degrees of freedom, > 0.
+
+    Returns:
+        ``t`` with ``P(-t <= T <= t) == confidence``.
+    """
+    if not 0.0 < confidence < 1.0:
+        raise ValueError(f"confidence must be in (0,1), got {confidence}")
+    if df <= 0:
+        raise ValueError("df must be > 0")
+    target = 1.0 - confidence
+    lo, hi = 0.0, 1.0
+    while student_t_sf(hi, df) > target:
+        hi *= 2.0
+        if hi > 1e12:                      # df < 1 with extreme coverage
+            return hi
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        if student_t_sf(mid, df) > target:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+@dataclass(frozen=True)
+class SeedComparison:
+    """Two methods compared across seeds, paired seed by seed.
+
+    Attributes:
+        label_a / label_b: method names.
+        seeds: the seeds, in the order the gaps are listed.
+        values_a / values_b: each method's metric, one per seed.
+        gaps: ``values_b[i] - values_a[i]``, the paired differences.
+        mean_a / mean_b / mean_gap: means over seeds.
+        sd_a / sd_b / sd_gap: sample standard deviations (n-1).
+        best_a / best_b: each method's best seed, using
+            ``higher_is_better`` -- what the paper's "best results" would be
+            if "best" ranges over its 10 runs.
+        best_gap: ``best_b - best_a``, the best-case comparison.
+        lo / hi: paired-t interval for ``mean_gap``.
+        t_stat / p_value: paired t-test of ``mean_gap == 0``.
+        n_seeds, df, confidence, higher_is_better, method.
+    """
+
+    label_a: str
+    label_b: str
+    seeds: Tuple[int, ...]
+    values_a: Tuple[float, ...]
+    values_b: Tuple[float, ...]
+    gaps: Tuple[float, ...]
+    mean_a: float
+    mean_b: float
+    mean_gap: float
+    sd_a: float
+    sd_b: float
+    sd_gap: float
+    best_a: float
+    best_b: float
+    best_gap: float
+    lo: float
+    hi: float
+    t_stat: Optional[float]
+    p_value: Optional[float]
+    n_seeds: int
+    df: int
+    confidence: float
+    higher_is_better: bool
+    method: str
+
+    @property
+    def significant(self) -> bool:
+        """Whether the interval excludes zero."""
+        return not (self.lo <= 0.0 <= self.hi)
+
+    def covers(self, value: float) -> bool:
+        """Whether the interval contains ``value``.
+
+        Used against the paper's printed gap. Note what this does and does not
+        say: it says the two are not inconsistent, not that they are equal.
+        A wide interval covers a great deal.
+        """
+        return self.lo <= value <= self.hi
+
+    def as_dict(self) -> Dict[str, object]:
+        return {
+            "label_a": self.label_a, "label_b": self.label_b,
+            "seeds": list(self.seeds),
+            "values_a": list(self.values_a), "values_b": list(self.values_b),
+            "gaps": list(self.gaps),
+            "mean_a": self.mean_a, "mean_b": self.mean_b,
+            "mean_gap": self.mean_gap,
+            "sd_a": self.sd_a, "sd_b": self.sd_b, "sd_gap": self.sd_gap,
+            "best_a": self.best_a, "best_b": self.best_b,
+            "best_gap": self.best_gap,
+            "ci_lo": self.lo, "ci_hi": self.hi,
+            "t_stat": self.t_stat, "p_value": self.p_value,
+            "n_seeds": self.n_seeds, "df": self.df,
+            "confidence": self.confidence,
+            "higher_is_better": self.higher_is_better,
+            "significant": self.significant,
+            "interval_method": self.method,
+        }
+
+
+def _sd(xs: Sequence[float]) -> float:
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    m = sum(xs) / n
+    return math.sqrt(sum((x - m) ** 2 for x in xs) / (n - 1))
+
+
+def seed_level_comparison(
+    values_a: Dict[int, float], values_b: Dict[int, float],
+    label_a: str = "A", label_b: str = "B",
+    confidence: float = 0.95, higher_is_better: bool = True,
+) -> SeedComparison:
+    """Paired comparison across seeds, with a Student-t interval.
+
+    Pairing is by seed, so each gap holds the generation draw fixed and the
+    two methods saw the same items *and* the same randomness. The variance of
+    those gaps is then an estimate of how much the gap itself moves from run
+    to run -- the quantity a single-seed interval cannot see.
+
+    A single seed is accepted and reported as such: ``n_seeds=1`` gives
+    ``df=0``, an infinite interval, and ``p_value=None``. That is the honest
+    output, and it is why the plan replicates the headline arms.
+
+    Args:
+        values_a: ``seed -> metric`` for the baseline.
+        values_b: ``seed -> metric`` for the method.
+        label_a / label_b: names for the report.
+        confidence: coverage.
+        higher_is_better: ``True`` for accuracy and F1, ``False`` for CHAIR,
+            where a lower score is better. Only affects ``best_*``.
+
+    Returns:
+        A :class:`SeedComparison`.
+
+    Raises:
+        ValueError: if no seed is present in both.
+    """
+    seeds = tuple(sorted(set(values_a) & set(values_b)))
+    if not seeds:
+        raise ValueError(
+            f"no seed ran both {label_a!r} and {label_b!r}: "
+            f"{label_a} has {sorted(values_a)}, {label_b} has {sorted(values_b)}"
+        )
+    a = tuple(values_a[s] for s in seeds)
+    b = tuple(values_b[s] for s in seeds)
+    gaps = tuple(y - x for x, y in zip(a, b))
+    n = len(seeds)
+    mean_gap = sum(gaps) / n
+    sd_gap = _sd(gaps)
+    pick = max if higher_is_better else min
+    best_a, best_b = pick(a), pick(b)
+
+    if n < 2:
+        lo, hi = -math.inf, math.inf
+        t_stat = p_value = None
+    else:
+        se = sd_gap / math.sqrt(n)
+        crit = t_for_confidence(confidence, n - 1)
+        lo, hi = mean_gap - crit * se, mean_gap + crit * se
+        if se == 0.0:
+            # Every seed gave the identical gap. Under greedy decoding that is
+            # expected and the interval is a point; calling it p=0 would be a
+            # claim about a distribution that was never sampled.
+            t_stat = math.inf if mean_gap != 0.0 else 0.0
+            p_value = 0.0 if mean_gap != 0.0 else 1.0
+        else:
+            t_stat = mean_gap / se
+            p_value = student_t_sf(t_stat, n - 1)
+
+    return SeedComparison(
+        label_a=label_a, label_b=label_b, seeds=seeds,
+        values_a=a, values_b=b, gaps=gaps,
+        mean_a=sum(a) / n, mean_b=sum(b) / n, mean_gap=mean_gap,
+        sd_a=_sd(a), sd_b=_sd(b), sd_gap=sd_gap,
+        best_a=best_a, best_b=best_b, best_gap=best_b - best_a,
+        lo=lo, hi=hi, t_stat=t_stat, p_value=p_value,
+        n_seeds=n, df=max(0, n - 1), confidence=confidence,
+        higher_is_better=higher_is_better,
+        method=(f"paired Student-t over {n} seeds (df={n - 1})"
+                if n >= 2 else "single seed: no across-seed interval"),
+    )

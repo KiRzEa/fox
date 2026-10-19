@@ -1,386 +1,597 @@
 {
-  "round": "r2",
-  "n_sessions": 11,
-  "budget_hours": 10.0,
+  "round": "r3",
+  "order": "priority",
+  "n_sessions": 10,
+  "budget_hours": 9.0,
   "n_calibrated": 6,
   "jobs": {
-    "table2:sampling:chair:val2014_500": {
-      "id": "table2:sampling:chair:val2014_500",
-      "target": "table2",
-      "note": "CHAIR_S / CHAIR_I",
-      "command": "python -m foxrepro.bench.generate --method sampling --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
-      "est_s": 4212.0,
-      "run_file": "m-sampling__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-5c7c06df.jsonl",
-      "n_samples": 500,
-      "measured": true
-    },
-    "table9:sampling:chair:val2014_500:greedy": {
-      "id": "table9:sampling:chair:val2014_500:greedy",
+    "table9:sampling:pope:random:greedy": {
+      "id": "table9:sampling:pope:random:greedy",
       "target": "table9",
-      "note": "greedy CHAIR",
-      "command": "python -m foxrepro.bench.generate --method sampling --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
-      "est_s": 3930.0,
-      "run_file": "m-sampling__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-4a534adb.jsonl",
-      "n_samples": 500,
-      "measured": true
-    },
-    "table2:fox:chair:val2014_500": {
-      "id": "table2:fox:chair:val2014_500",
-      "target": "table2",
-      "note": "CHAIR_S / CHAIR_I",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native",
-      "est_s": 5598.0,
-      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-5c7c06df.jsonl",
-      "n_samples": 500,
-      "measured": true
-    },
-    "table9:fox:chair:val2014_500:greedy": {
-      "id": "table9:fox:chair:val2014_500:greedy",
-      "target": "table9",
-      "note": "greedy CHAIR",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native",
-      "est_s": 5538.0,
-      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-4a534adb.jsonl",
-      "n_samples": 500,
-      "measured": true
-    },
-    "table1:sampling:pope:adversarial": {
-      "id": "table1:sampling:pope:adversarial",
-      "target": "table1",
-      "note": "POPE accuracy (T1) and F1 (T8)",
-      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 1806.0,
-      "run_file": "m-sampling__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-2d07edcb.jsonl",
-      "n_samples": 3000,
-      "measured": true
-    },
-    "table1:fox:pope:adversarial": {
-      "id": "table1:fox:pope:adversarial",
-      "target": "table1",
-      "note": "POPE accuracy (T1) and F1 (T8)",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
-      "est_s": 3510.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-2d07edcb.jsonl",
-      "n_samples": 3000,
-      "measured": true
-    },
-    "fig9:fox:pope:adversarial:t0.2:n500": {
-      "id": "fig9:fox:pope:adversarial:t0.2:n500",
-      "target": "fig9",
-      "note": "tau_js=0.2, 500 samples",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --tau-js 0.2 --limit 500",
-      "est_s": 1400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-t0.2-cc3f4b07.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "prompt_ablation:sampling:pope:adversarial:spllava_v1_spaced": {
-      "id": "prompt_ablation:sampling:pope:adversarial:spllava_v1_spaced",
-      "target": "prompt_ablation",
-      "note": "faithful + spaced_sysprompt",
-      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1_spaced --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 4200.0,
-      "run_file": "m-sampling__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-b878f999.jsonl",
+      "note": "greedy POPE -- the paper's own control",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split random --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-random__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "table1:vcd:pope:random": {
-      "id": "table1:vcd:pope:random",
-      "target": "table1",
-      "note": "POPE accuracy (T1) and F1 (T8)",
-      "command": "python -m foxrepro.bench.generate --method vcd --benchmark pope --split random --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 8400.0,
-      "run_file": "m-vcd__b-pope__s-random__seed-42__dt-fp16__v-sampling-2d07edcb.jsonl",
+    "table9:fox:pope:random:greedy": {
+      "id": "table9:fox:pope:random:greedy",
+      "target": "table9",
+      "note": "greedy POPE -- the paper's own control",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split random --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-random__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table9:sampling:pope:popular:greedy": {
+      "id": "table9:sampling:pope:popular:greedy",
+      "target": "table9",
+      "note": "greedy POPE -- the paper's own control",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split popular --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-popular__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table9:fox:pope:popular:greedy": {
+      "id": "table9:fox:pope:popular:greedy",
+      "target": "table9",
+      "note": "greedy POPE -- the paper's own control",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split popular --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-popular__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table9:sampling:pope:adversarial:greedy": {
+      "id": "table9:sampling:pope:adversarial:greedy",
+      "target": "table9",
+      "note": "greedy POPE -- the paper's own control",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
       "n_samples": 3000,
       "measured": false
     },
     "table9:fox:pope:adversarial:greedy": {
       "id": "table9:fox:pope:adversarial:greedy",
       "target": "table9",
-      "note": "greedy POPE",
+      "note": "greedy POPE -- the paper's own control",
       "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
-      "est_s": 8400.0,
+      "est_s": 3300.0,
       "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "dtype_arms:fox:pope:adversarial:ldfp32": {
-      "id": "dtype_arms:fox:pope:adversarial:ldfp32",
-      "target": "dtype_arms",
-      "note": "logit_dtype=fp32",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype fp32",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-c7d23f9e.jsonl",
+    "determinism:fox:pope:adversarial:greedy:s997:n50": {
+      "id": "determinism:fox:pope:adversarial:greedy:s997:n50",
+      "target": "determinism",
+      "note": "same inputs, different seed: outputs must match",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 997 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --limit 50",
+      "est_s": 55.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-997__dt-fp16__v-greedy-17d4eb8d.jsonl",
+      "n_samples": 50,
+      "measured": false
+    },
+    "determinism:fox:chair:val2014_500:greedy:s997:n50": {
+      "id": "determinism:fox:chair:val2014_500:greedy:s997:n50",
+      "target": "determinism",
+      "note": "same inputs, different seed: outputs must match",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 997 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native --limit 50",
+      "est_s": 545.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-997__dt-fp16__v-greedy-4a534adb.jsonl",
+      "n_samples": 50,
+      "measured": false
+    },
+    "table1:sampling:pope:adversarial:s43": {
+      "id": "table1:sampling:pope:adversarial:s43",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-adversarial__seed-43__dt-fp16__v-sampling-2d07edcb.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "table2:vcd:chair:val2014_500": {
-      "id": "table2:vcd:chair:val2014_500",
+    "table1:fox:pope:adversarial:s43": {
+      "id": "table1:fox:pope:adversarial:s43",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-43__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:sampling:pope:adversarial:s44": {
+      "id": "table1:sampling:pope:adversarial:s44",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 44 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-adversarial__seed-44__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:fox:pope:adversarial:s44": {
+      "id": "table1:fox:pope:adversarial:s44",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 44 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-44__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:sampling:pope:adversarial:s45": {
+      "id": "table1:sampling:pope:adversarial:s45",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 45 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-adversarial__seed-45__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:fox:pope:adversarial:s45": {
+      "id": "table1:fox:pope:adversarial:s45",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 45 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-45__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:sampling:pope:adversarial:s46": {
+      "id": "table1:sampling:pope:adversarial:s46",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 46 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-adversarial__seed-46__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:fox:pope:adversarial:s46": {
+      "id": "table1:fox:pope:adversarial:s46",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 46 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-46__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:sampling:pope:adversarial:s47": {
+      "id": "table1:sampling:pope:adversarial:s47",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 47 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-adversarial__seed-47__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:fox:pope:adversarial:s47": {
+      "id": "table1:fox:pope:adversarial:s47",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 47 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-47__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:sampling:pope:adversarial:s48": {
+      "id": "table1:sampling:pope:adversarial:s48",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 48 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-adversarial__seed-48__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:fox:pope:adversarial:s48": {
+      "id": "table1:fox:pope:adversarial:s48",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 48 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-48__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:sampling:pope:adversarial:s49": {
+      "id": "table1:sampling:pope:adversarial:s49",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 49 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-adversarial__seed-49__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:fox:pope:adversarial:s49": {
+      "id": "table1:fox:pope:adversarial:s49",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 49 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-49__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:sampling:pope:adversarial:s50": {
+      "id": "table1:sampling:pope:adversarial:s50",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 50 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-adversarial__seed-50__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:fox:pope:adversarial:s50": {
+      "id": "table1:fox:pope:adversarial:s50",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 50 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-50__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:sampling:pope:adversarial:s51": {
+      "id": "table1:sampling:pope:adversarial:s51",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 51 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-adversarial__seed-51__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:fox:pope:adversarial:s51": {
+      "id": "table1:fox:pope:adversarial:s51",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 51 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-51__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table2:sampling:chair:val2014_500:s43": {
+      "id": "table2:sampling:chair:val2014_500:s43",
       "target": "table2",
       "note": "CHAIR_S / CHAIR_I",
-      "command": "python -m foxrepro.bench.generate --method vcd --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
-      "est_s": 3900.0,
-      "run_file": "m-vcd__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 4100.0,
+      "run_file": "m-sampling__b-chair__s-val2014_500__seed-43__dt-fp16__v-sampling-5c7c06df.jsonl",
       "n_samples": 500,
       "measured": false
     },
-    "controls:fox:chair:val2014_500:off": {
-      "id": "controls:fox:chair:val2014_500:off",
+    "table2:fox:chair:val2014_500:s43": {
+      "id": "table2:fox:chair:val2014_500:s43",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-43__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2:sampling:chair:val2014_500:s44": {
+      "id": "table2:sampling:chair:val2014_500:s44",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 44 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 4100.0,
+      "run_file": "m-sampling__b-chair__s-val2014_500__seed-44__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2:fox:chair:val2014_500:s44": {
+      "id": "table2:fox:chair:val2014_500:s44",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 44 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-44__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2:sampling:chair:val2014_500:s45": {
+      "id": "table2:sampling:chair:val2014_500:s45",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 45 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 4100.0,
+      "run_file": "m-sampling__b-chair__s-val2014_500__seed-45__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2:fox:chair:val2014_500:s45": {
+      "id": "table2:fox:chair:val2014_500:s45",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 45 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-45__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2:sampling:chair:val2014_500:s46": {
+      "id": "table2:sampling:chair:val2014_500:s46",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 46 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 4100.0,
+      "run_file": "m-sampling__b-chair__s-val2014_500__seed-46__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2:fox:chair:val2014_500:s46": {
+      "id": "table2:fox:chair:val2014_500:s46",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 46 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-46__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2:sampling:chair:val2014_500:s47": {
+      "id": "table2:sampling:chair:val2014_500:s47",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 47 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 4100.0,
+      "run_file": "m-sampling__b-chair__s-val2014_500__seed-47__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2:fox:chair:val2014_500:s47": {
+      "id": "table2:fox:chair:val2014_500:s47",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 47 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-47__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2:sampling:chair:val2014_500:s48": {
+      "id": "table2:sampling:chair:val2014_500:s48",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 48 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 4100.0,
+      "run_file": "m-sampling__b-chair__s-val2014_500__seed-48__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2:fox:chair:val2014_500:s48": {
+      "id": "table2:fox:chair:val2014_500:s48",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 48 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-48__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2:sampling:chair:val2014_500:s49": {
+      "id": "table2:sampling:chair:val2014_500:s49",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 49 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 4100.0,
+      "run_file": "m-sampling__b-chair__s-val2014_500__seed-49__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2:fox:chair:val2014_500:s49": {
+      "id": "table2:fox:chair:val2014_500:s49",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 49 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-49__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2:sampling:chair:val2014_500:s50": {
+      "id": "table2:sampling:chair:val2014_500:s50",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 50 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 4100.0,
+      "run_file": "m-sampling__b-chair__s-val2014_500__seed-50__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2:fox:chair:val2014_500:s50": {
+      "id": "table2:fox:chair:val2014_500:s50",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 50 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-50__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2:sampling:chair:val2014_500:s51": {
+      "id": "table2:sampling:chair:val2014_500:s51",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 51 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 4100.0,
+      "run_file": "m-sampling__b-chair__s-val2014_500__seed-51__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2:fox:chair:val2014_500:s51": {
+      "id": "table2:fox:chair:val2014_500:s51",
+      "target": "table2",
+      "note": "CHAIR_S / CHAIR_I",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 51 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-51__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "controls:fox:pope:adversarial:greedy:off": {
+      "id": "controls:fox:pope:adversarial:greedy:off",
       "target": "controls",
-      "note": "mode=off",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode off --logit-dtype native",
-      "est_s": 3900.0,
-      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-1bea1044.jsonl",
+      "note": "mode=off, greedy",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode off --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-f2e4a62c.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "controls:fox:chair:val2014_500:greedy:off": {
+      "id": "controls:fox:chair:val2014_500:greedy:off",
+      "target": "controls",
+      "note": "mode=off, greedy",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode off --logit-dtype native",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-4b6c5598.jsonl",
       "n_samples": 500,
       "measured": false
     },
-    "table1:vcd:pope:popular": {
-      "id": "table1:vcd:pope:popular",
-      "target": "table1",
-      "note": "POPE accuracy (T1) and F1 (T8)",
-      "command": "python -m foxrepro.bench.generate --method vcd --benchmark pope --split popular --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 8400.0,
-      "run_file": "m-vcd__b-pope__s-popular__seed-42__dt-fp16__v-sampling-2d07edcb.jsonl",
+    "controls:fox:pope:adversarial:greedy:as_described": {
+      "id": "controls:fox:pope:adversarial:greedy:as_described",
+      "target": "controls",
+      "note": "mode=as_described, greedy",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_described --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-7d65ec90.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "gamma_sweep:fox:pope:adversarial:g100": {
-      "id": "gamma_sweep:fox:pope:adversarial:g100",
-      "target": "gamma_sweep",
-      "note": "gamma=100",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --gamma 100",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-g100-c01dcb19.jsonl",
+    "controls:fox:chair:val2014_500:greedy:as_described": {
+      "id": "controls:fox:chair:val2014_500:greedy:as_described",
+      "target": "controls",
+      "note": "mode=as_described, greedy",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_described --logit-dtype native",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-7dc3dd43.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "controls:fox:pope:adversarial:greedy:ulp_control": {
+      "id": "controls:fox:pope:adversarial:greedy:ulp_control",
+      "target": "controls",
+      "note": "mode=ulp_control, greedy",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode ulp_control --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-0828ac2d.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "dtype_arms:fox:pope:adversarial:ldbf16": {
-      "id": "dtype_arms:fox:pope:adversarial:ldbf16",
+    "controls:fox:chair:val2014_500:greedy:ulp_control": {
+      "id": "controls:fox:chair:val2014_500:greedy:ulp_control",
+      "target": "controls",
+      "note": "mode=ulp_control, greedy",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode ulp_control --logit-dtype native",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-58704f62.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "controls:fox:pope:adversarial:greedy:noise_control": {
+      "id": "controls:fox:pope:adversarial:greedy:noise_control",
+      "target": "controls",
+      "note": "mode=noise_control, greedy",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode noise_control --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-94ffb3d6.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "controls:fox:chair:val2014_500:greedy:noise_control": {
+      "id": "controls:fox:chair:val2014_500:greedy:noise_control",
+      "target": "controls",
+      "note": "mode=noise_control, greedy",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode noise_control --logit-dtype native",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-41d5cbc1.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "dtype_arms:fox:pope:adversarial:greedy:ldfp32": {
+      "id": "dtype_arms:fox:pope:adversarial:greedy:ldfp32",
       "target": "dtype_arms",
-      "note": "logit_dtype=bf16",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype bf16",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-08d18927.jsonl",
+      "note": "logit_dtype=fp32, greedy",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype fp32",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-ec5b84b4.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "table9:vcd:chair:val2014_500:greedy": {
-      "id": "table9:vcd:chair:val2014_500:greedy",
-      "target": "table9",
-      "note": "greedy CHAIR",
-      "command": "python -m foxrepro.bench.generate --method vcd --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
-      "est_s": 3900.0,
-      "run_file": "m-vcd__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-4a534adb.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "controls:fox:chair:val2014_500:as_described": {
-      "id": "controls:fox:chair:val2014_500:as_described",
-      "target": "controls",
-      "note": "mode=as_described",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_described --logit-dtype native",
-      "est_s": 3900.0,
-      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-69085f67.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "table1:vcd:pope:adversarial": {
-      "id": "table1:vcd:pope:adversarial",
-      "target": "table1",
-      "note": "POPE accuracy (T1) and F1 (T8)",
-      "command": "python -m foxrepro.bench.generate --method vcd --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 8400.0,
-      "run_file": "m-vcd__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-2d07edcb.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "gamma_sweep:fox:pope:adversarial:g1000": {
-      "id": "gamma_sweep:fox:pope:adversarial:g1000",
-      "target": "gamma_sweep",
-      "note": "gamma=1000",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --gamma 1000",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-g1000-4954d32a.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "system_prompt:fox:pope:adversarial:spnone": {
-      "id": "system_prompt:fox:pope:adversarial:spnone",
-      "target": "system_prompt",
-      "note": "tests the X_sys anchor claim directly",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt none --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-34ca7856.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "gamma_sweep:fox:chair:val2014_500:g100": {
-      "id": "gamma_sweep:fox:chair:val2014_500:g100",
-      "target": "gamma_sweep",
-      "note": "gamma=100, finer metric",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native --gamma 100",
-      "est_s": 3900.0,
-      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-g100-e54a1b33.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "controls:fox:chair:val2014_500:ulp_control": {
-      "id": "controls:fox:chair:val2014_500:ulp_control",
-      "target": "controls",
-      "note": "mode=ulp_control",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode ulp_control --logit-dtype native",
-      "est_s": 3900.0,
-      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-c676d8ec.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "table1:fox:pope:random": {
-      "id": "table1:fox:pope:random",
-      "target": "table1",
-      "note": "POPE accuracy (T1) and F1 (T8)",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split random --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-random__seed-42__dt-fp16__v-sampling-2d07edcb.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "gamma_sweep:fox:pope:adversarial:g10000": {
-      "id": "gamma_sweep:fox:pope:adversarial:g10000",
-      "target": "gamma_sweep",
-      "note": "gamma=10000",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --gamma 10000",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-g10000-3170f57b.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "table7:fox:pope:adversarial:a1": {
-      "id": "table7:fox:pope:adversarial:a1",
-      "target": "table7",
-      "note": "alpha=1",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --alpha 1",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-a166486d.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "gamma_sweep:fox:chair:val2014_500:g1000": {
-      "id": "gamma_sweep:fox:chair:val2014_500:g1000",
-      "target": "gamma_sweep",
-      "note": "gamma=1000, finer metric",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native --gamma 1000",
-      "est_s": 3900.0,
-      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-g1000-da9e2265.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "controls:fox:chair:val2014_500:noise_control": {
-      "id": "controls:fox:chair:val2014_500:noise_control",
-      "target": "controls",
-      "note": "mode=noise_control",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode noise_control --logit-dtype native",
-      "est_s": 3900.0,
-      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-0f7714f7.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "table1:fox:pope:popular": {
-      "id": "table1:fox:pope:popular",
-      "target": "table1",
-      "note": "POPE accuracy (T1) and F1 (T8)",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split popular --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-popular__seed-42__dt-fp16__v-sampling-2d07edcb.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "gamma_sweep:fox:pope:adversarial:g60000": {
-      "id": "gamma_sweep:fox:pope:adversarial:g60000",
-      "target": "gamma_sweep",
-      "note": "gamma=60000",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --gamma 60000",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-g60000-a3c1a2b5.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "table7:fox:pope:adversarial:a3": {
-      "id": "table7:fox:pope:adversarial:a3",
-      "target": "table7",
-      "note": "alpha=3",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --alpha 3",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-a8f6d33d.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "gamma_sweep:fox:chair:val2014_500:g10000": {
-      "id": "gamma_sweep:fox:chair:val2014_500:g10000",
-      "target": "gamma_sweep",
-      "note": "gamma=10000, finer metric",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native --gamma 10000",
-      "est_s": 3900.0,
-      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-g10000-c71eaeef.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "dtype_arms:fox:chair:val2014_500:ldfp32": {
-      "id": "dtype_arms:fox:chair:val2014_500:ldfp32",
+    "dtype_arms:fox:chair:val2014_500:greedy:ldfp32": {
+      "id": "dtype_arms:fox:chair:val2014_500:greedy:ldfp32",
       "target": "dtype_arms",
-      "note": "logit_dtype=fp32",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype fp32",
-      "est_s": 3900.0,
-      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-8bba4425.jsonl",
+      "note": "logit_dtype=fp32, greedy",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype fp32",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-11fe4386.jsonl",
       "n_samples": 500,
       "measured": false
     },
-    "table9:vcd:pope:random:greedy": {
-      "id": "table9:vcd:pope:random:greedy",
-      "target": "table9",
-      "note": "greedy POPE",
-      "command": "python -m foxrepro.bench.generate --method vcd --benchmark pope --split random --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 8400.0,
-      "run_file": "m-vcd__b-pope__s-random__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
+    "dtype_arms:fox:pope:adversarial:greedy:ldbf16": {
+      "id": "dtype_arms:fox:pope:adversarial:greedy:ldbf16",
+      "target": "dtype_arms",
+      "note": "logit_dtype=bf16, greedy",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype bf16",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-30d01489.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "boost_visual:fox:pope:adversarial:boost_visual:g4": {
-      "id": "boost_visual:fox:pope:adversarial:boost_visual:g4",
+    "dtype_arms:fox:chair:val2014_500:greedy:ldbf16": {
+      "id": "dtype_arms:fox:chair:val2014_500:greedy:ldbf16",
+      "target": "dtype_arms",
+      "note": "logit_dtype=bf16, greedy",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype bf16",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-129590cd.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "gamma_sweep:fox:chair:val2014_500:greedy:g100": {
+      "id": "gamma_sweep:fox:chair:val2014_500:greedy:g100",
+      "target": "gamma_sweep",
+      "note": "gamma=100, greedy",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native --gamma 100",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-g100-9ebfabc4.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "gamma_sweep:fox:chair:val2014_500:greedy:g10000": {
+      "id": "gamma_sweep:fox:chair:val2014_500:greedy:g10000",
+      "target": "gamma_sweep",
+      "note": "gamma=10000, greedy",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native --gamma 10000",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-g10000-1c417645.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "boost_visual:fox:chair:val2014_500:greedy:boost_visual:g4": {
+      "id": "boost_visual:fox:chair:val2014_500:greedy:boost_visual:g4",
       "target": "boost_visual",
       "note": "amplify visual attention, delta=4",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode boost_visual --logit-dtype native --gamma 4",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-g4-01a74670.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "table7:fox:pope:adversarial:a4": {
-      "id": "table7:fox:pope:adversarial:a4",
-      "target": "table7",
-      "note": "alpha=4",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --alpha 4",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-5f97963a.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "gamma_sweep:fox:chair:val2014_500:g60000": {
-      "id": "gamma_sweep:fox:chair:val2014_500:g60000",
-      "target": "gamma_sweep",
-      "note": "gamma=60000, finer metric",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype native --gamma 60000",
-      "est_s": 3900.0,
-      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-g60000-c41b10bd.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "dtype_arms:fox:chair:val2014_500:ldbf16": {
-      "id": "dtype_arms:fox:chair:val2014_500:ldbf16",
-      "target": "dtype_arms",
-      "note": "logit_dtype=bf16",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode as_implemented --logit-dtype bf16",
-      "est_s": 3900.0,
-      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-b53515d4.jsonl",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode boost_visual --logit-dtype native --gamma 4",
+      "est_s": 5450.0,
+      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-g4-4f055e8b.jsonl",
       "n_samples": 500,
       "measured": false
     },
@@ -389,59 +600,19 @@
       "target": "table1",
       "note": "POPE accuracy (T1) and F1 (T8)",
       "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split random --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 4200.0,
+      "est_s": 1650.0,
       "run_file": "m-sampling__b-pope__s-random__seed-42__dt-fp16__v-sampling-2d07edcb.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "table9:sampling:pope:adversarial:greedy": {
-      "id": "table9:sampling:pope:adversarial:greedy",
-      "target": "table9",
-      "note": "greedy POPE",
-      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 4200.0,
-      "run_file": "m-sampling__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
+    "table1:fox:pope:random": {
+      "id": "table1:fox:pope:random",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split random --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-random__seed-42__dt-fp16__v-sampling-2d07edcb.jsonl",
       "n_samples": 3000,
-      "measured": false
-    },
-    "table9:vcd:pope:popular:greedy": {
-      "id": "table9:vcd:pope:popular:greedy",
-      "target": "table9",
-      "note": "greedy POPE",
-      "command": "python -m foxrepro.bench.generate --method vcd --benchmark pope --split popular --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 8400.0,
-      "run_file": "m-vcd__b-pope__s-popular__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "controls:fox:pope:adversarial:off": {
-      "id": "controls:fox:pope:adversarial:off",
-      "target": "controls",
-      "note": "mode=off",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode off --logit-dtype native",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-93866aba.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "fig9:fox:pope:adversarial:k0.25:n500": {
-      "id": "fig9:fox:pope:adversarial:k0.25:n500",
-      "target": "fig9",
-      "note": "k=0.25, 500 samples",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --k 0.25 --limit 500",
-      "est_s": 1400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-k0.25-041092ea.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "boost_visual:fox:chair:val2014_500:boost_visual:g2": {
-      "id": "boost_visual:fox:chair:val2014_500:boost_visual:g2",
-      "target": "boost_visual",
-      "note": "amplify visual attention, delta=2",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode boost_visual --logit-dtype native --gamma 2",
-      "est_s": 3900.0,
-      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-g2-16b25551.jsonl",
-      "n_samples": 500,
       "measured": false
     },
     "table1:sampling:pope:popular": {
@@ -449,159 +620,289 @@
       "target": "table1",
       "note": "POPE accuracy (T1) and F1 (T8)",
       "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split popular --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 4200.0,
+      "est_s": 1650.0,
       "run_file": "m-sampling__b-pope__s-popular__seed-42__dt-fp16__v-sampling-2d07edcb.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "system_prompt:sampling:pope:adversarial:spnone": {
-      "id": "system_prompt:sampling:pope:adversarial:spnone",
-      "target": "system_prompt",
-      "note": "tests the X_sys anchor claim directly",
-      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt none --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 4200.0,
-      "run_file": "m-sampling__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-34ca7856.jsonl",
+    "table1:fox:pope:popular": {
+      "id": "table1:fox:pope:popular",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split popular --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-popular__seed-42__dt-fp16__v-sampling-2d07edcb.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "table9:vcd:pope:adversarial:greedy": {
-      "id": "table9:vcd:pope:adversarial:greedy",
-      "target": "table9",
-      "note": "greedy POPE",
-      "command": "python -m foxrepro.bench.generate --method vcd --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 8400.0,
-      "run_file": "m-vcd__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
+    "table1:sampling:pope:random:s43": {
+      "id": "table1:sampling:pope:random:s43",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split random --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-random__seed-43__dt-fp16__v-sampling-2d07edcb.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "controls:fox:pope:adversarial:as_described": {
-      "id": "controls:fox:pope:adversarial:as_described",
+    "table1:fox:pope:random:s43": {
+      "id": "table1:fox:pope:random:s43",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split random --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-random__seed-43__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:sampling:pope:popular:s43": {
+      "id": "table1:sampling:pope:popular:s43",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split popular --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-popular__seed-43__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:fox:pope:popular:s43": {
+      "id": "table1:fox:pope:popular:s43",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split popular --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-popular__seed-43__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:sampling:pope:random:s44": {
+      "id": "table1:sampling:pope:random:s44",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split random --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 44 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-random__seed-44__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:fox:pope:random:s44": {
+      "id": "table1:fox:pope:random:s44",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split random --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 44 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-random__seed-44__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:sampling:pope:popular:s44": {
+      "id": "table1:sampling:pope:popular:s44",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split popular --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 44 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-popular__seed-44__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table1:fox:pope:popular:s44": {
+      "id": "table1:fox:pope:popular:s44",
+      "target": "table1",
+      "note": "POPE accuracy (T1) and F1 (T8)",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split popular --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 44 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-popular__seed-44__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "controls:fox:pope:adversarial:off": {
+      "id": "controls:fox:pope:adversarial:off",
       "target": "controls",
-      "note": "mode=as_described",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_described --logit-dtype native",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-3a6e063c.jsonl",
+      "note": "mode=off, sampling",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode off --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-93866aba.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "fig9:fox:pope:adversarial:k0.45:n500": {
-      "id": "fig9:fox:pope:adversarial:k0.45:n500",
-      "target": "fig9",
-      "note": "k=0.45, 500 samples",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --k 0.45 --limit 500",
-      "est_s": 1400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-k0.45-ebb32c6c.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "boost_visual:fox:chair:val2014_500:boost_visual:g4": {
-      "id": "boost_visual:fox:chair:val2014_500:boost_visual:g4",
-      "target": "boost_visual",
-      "note": "amplify visual attention, delta=4",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode boost_visual --logit-dtype native --gamma 4",
-      "est_s": 3900.0,
-      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-g4-60acf738.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "table9:sampling:pope:random:greedy": {
-      "id": "table9:sampling:pope:random:greedy",
-      "target": "table9",
-      "note": "greedy POPE",
-      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split random --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 4200.0,
-      "run_file": "m-sampling__b-pope__s-random__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
+    "controls:fox:pope:adversarial:off:s43": {
+      "id": "controls:fox:pope:adversarial:off:s43",
+      "target": "controls",
+      "note": "mode=off, sampling",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode off --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-43__dt-fp16__v-sampling-93866aba.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "prompt_ablation:sampling:pope:adversarial:wnewline": {
-      "id": "prompt_ablation:sampling:pope:adversarial:wnewline",
-      "target": "prompt_ablation",
-      "note": "faithful + newline",
-      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper newline --prompt-template-id pope_v0_raw",
-      "est_s": 4200.0,
-      "run_file": "m-sampling__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-6a72a13d.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "table9:fox:pope:random:greedy": {
-      "id": "table9:fox:pope:random:greedy",
-      "target": "table9",
-      "note": "greedy POPE",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split random --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-random__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
+    "controls:fox:pope:adversarial:off:s44": {
+      "id": "controls:fox:pope:adversarial:off:s44",
+      "target": "controls",
+      "note": "mode=off, sampling",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 44 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode off --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-44__dt-fp16__v-sampling-93866aba.jsonl",
       "n_samples": 3000,
       "measured": false
     },
     "controls:fox:pope:adversarial:ulp_control": {
       "id": "controls:fox:pope:adversarial:ulp_control",
       "target": "controls",
-      "note": "mode=ulp_control",
+      "note": "mode=ulp_control, sampling",
       "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode ulp_control --logit-dtype native",
-      "est_s": 8400.0,
+      "est_s": 3300.0,
       "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-01013bf7.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "fig9:fox:pope:adversarial:t0.1:n500": {
-      "id": "fig9:fox:pope:adversarial:t0.1:n500",
-      "target": "fig9",
-      "note": "tau_js=0.1, 500 samples",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --tau-js 0.1 --limit 500",
-      "est_s": 1400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-t0.1-4200dac4.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "boost_visual:fox:chair:val2014_500:boost_visual:g8": {
-      "id": "boost_visual:fox:chair:val2014_500:boost_visual:g8",
-      "target": "boost_visual",
-      "note": "amplify visual attention, delta=8",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1 --mode boost_visual --logit-dtype native --gamma 8",
-      "est_s": 3900.0,
-      "run_file": "m-fox__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-g8-36c4db23.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "table9:sampling:pope:popular:greedy": {
-      "id": "table9:sampling:pope:popular:greedy",
-      "target": "table9",
-      "note": "greedy POPE",
-      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split popular --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 4200.0,
-      "run_file": "m-sampling__b-pope__s-popular__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
+    "controls:fox:pope:adversarial:ulp_control:s43": {
+      "id": "controls:fox:pope:adversarial:ulp_control:s43",
+      "target": "controls",
+      "note": "mode=ulp_control, sampling",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode ulp_control --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-43__dt-fp16__v-sampling-01013bf7.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "prompt_ablation:sampling:pope:adversarial:pope_v1": {
-      "id": "prompt_ablation:sampling:pope:adversarial:pope_v1",
+    "controls:fox:pope:adversarial:ulp_control:s44": {
+      "id": "controls:fox:pope:adversarial:ulp_control:s44",
+      "target": "controls",
+      "note": "mode=ulp_control, sampling",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 44 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode ulp_control --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-44__dt-fp16__v-sampling-01013bf7.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "system_prompt:sampling:pope:adversarial:greedy:spnone": {
+      "id": "system_prompt:sampling:pope:adversarial:greedy:spnone",
+      "target": "system_prompt",
+      "note": "tests the X_sys anchor claim directly",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt none --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-657138b5.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "system_prompt:fox:pope:adversarial:greedy:spnone": {
+      "id": "system_prompt:fox:pope:adversarial:greedy:spnone",
+      "target": "system_prompt",
+      "note": "tests the X_sys anchor claim directly",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt none --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-657138b5.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "prompt_ablation:sampling:pope:adversarial:greedy:wnewline": {
+      "id": "prompt_ablation:sampling:pope:adversarial:greedy:wnewline",
+      "target": "prompt_ablation",
+      "note": "faithful + newline",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper newline --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-835af49e.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "prompt_ablation:sampling:pope:adversarial:greedy:pope_v1": {
+      "id": "prompt_ablation:sampling:pope:adversarial:greedy:pope_v1",
       "target": "prompt_ablation",
       "note": "faithful + single_word",
-      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v1",
-      "est_s": 4200.0,
-      "run_file": "m-sampling__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-1fa9e761.jsonl",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v1",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-273f9c06.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "table9:fox:pope:popular:greedy": {
-      "id": "table9:fox:pope:popular:greedy",
-      "target": "table9",
-      "note": "greedy POPE",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split popular --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-popular__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
+    "prompt_ablation:sampling:pope:adversarial:greedy:spllava_v1_spaced": {
+      "id": "prompt_ablation:sampling:pope:adversarial:greedy:spllava_v1_spaced",
+      "target": "prompt_ablation",
+      "note": "faithful + spaced_sysprompt",
+      "command": "python -m foxrepro.bench.generate --method sampling --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1_spaced --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 1650.0,
+      "run_file": "m-sampling__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-0b099584.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "controls:fox:pope:adversarial:noise_control": {
-      "id": "controls:fox:pope:adversarial:noise_control",
-      "target": "controls",
-      "note": "mode=noise_control",
-      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode noise_control --logit-dtype native",
-      "est_s": 8400.0,
-      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-ef49d336.jsonl",
+    "table7:fox:pope:adversarial:greedy:a1": {
+      "id": "table7:fox:pope:adversarial:greedy:a1",
+      "target": "table7",
+      "note": "alpha=1",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --alpha 1",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-2849ecbb.jsonl",
       "n_samples": 3000,
+      "measured": false
+    },
+    "table7:fox:pope:adversarial:greedy:a4": {
+      "id": "table7:fox:pope:adversarial:greedy:a4",
+      "target": "table7",
+      "note": "alpha=4",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --alpha 4",
+      "est_s": 3300.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-51104c9a.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "fig9:fox:pope:adversarial:greedy:k0.25:n500": {
+      "id": "fig9:fox:pope:adversarial:greedy:k0.25:n500",
+      "target": "fig9",
+      "note": "k=0.25, 500 samples",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --k 0.25 --limit 500",
+      "est_s": 550.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-k0.25-403b917a.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "fig9:fox:pope:adversarial:greedy:k0.45:n500": {
+      "id": "fig9:fox:pope:adversarial:greedy:k0.45:n500",
+      "target": "fig9",
+      "note": "k=0.45, 500 samples",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --k 0.45 --limit 500",
+      "est_s": 550.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-k0.45-a259d07c.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "fig9:fox:pope:adversarial:greedy:t0.1:n500": {
+      "id": "fig9:fox:pope:adversarial:greedy:t0.1:n500",
+      "target": "fig9",
+      "note": "tau_js=0.1, 500 samples",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --tau-js 0.1 --limit 500",
+      "est_s": 550.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-t0.1-4476086d.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "fig9:fox:pope:adversarial:greedy:t0.2:n500": {
+      "id": "fig9:fox:pope:adversarial:greedy:t0.2:n500",
+      "target": "fig9",
+      "note": "tau_js=0.2, 500 samples",
+      "command": "python -m foxrepro.bench.generate --method fox --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --mode as_implemented --logit-dtype native --tau-js 0.2 --limit 500",
+      "est_s": 550.0,
+      "run_file": "m-fox__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-t0.2-748a28e2.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table1:vcd:pope:adversarial": {
+      "id": "table1:vcd:pope:adversarial",
+      "target": "table1",
+      "note": "VCD-noise arm, not VCD proper",
+      "command": "python -m foxrepro.bench.generate --method vcd --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 3300.0,
+      "run_file": "m-vcd__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "n_samples": 3000,
+      "measured": false
+    },
+    "table2:vcd:chair:val2014_500": {
+      "id": "table2:vcd:chair:val2014_500",
+      "target": "table2",
+      "note": "VCD-noise arm, not VCD proper",
+      "command": "python -m foxrepro.bench.generate --method vcd --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 5450.0,
+      "run_file": "m-vcd__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
       "measured": false
     }
   },
@@ -609,128 +910,152 @@
     {
       "session": 1,
       "jobs": [
-        "table2:sampling:chair:val2014_500",
-        "table9:sampling:chair:val2014_500:greedy",
-        "table2:fox:chair:val2014_500",
-        "table9:fox:chair:val2014_500:greedy",
-        "table1:sampling:pope:adversarial",
-        "table1:fox:pope:adversarial"
+        "table9:sampling:pope:random:greedy",
+        "table9:fox:pope:random:greedy",
+        "table9:sampling:pope:popular:greedy",
+        "table9:fox:pope:popular:greedy",
+        "table9:sampling:pope:adversarial:greedy",
+        "table9:fox:pope:adversarial:greedy",
+        "determinism:fox:pope:adversarial:greedy:s997:n50",
+        "determinism:fox:chair:val2014_500:greedy:s997:n50",
+        "table1:sampling:pope:adversarial:s43",
+        "table1:fox:pope:adversarial:s43",
+        "table1:sampling:pope:adversarial:s44",
+        "table1:fox:pope:adversarial:s44",
+        "table1:sampling:pope:adversarial:s45",
+        "table1:fox:pope:adversarial:s45"
       ],
-      "est_hours": 6.83
+      "est_hours": 8.42
     },
     {
       "session": 2,
       "jobs": [
-        "fig9:fox:pope:adversarial:t0.2:n500",
-        "prompt_ablation:sampling:pope:adversarial:spllava_v1_spaced",
-        "table1:vcd:pope:random",
-        "table9:fox:pope:adversarial:greedy",
-        "dtype_arms:fox:pope:adversarial:ldfp32"
+        "table1:sampling:pope:adversarial:s46",
+        "table1:fox:pope:adversarial:s46",
+        "table1:sampling:pope:adversarial:s47",
+        "table1:fox:pope:adversarial:s47",
+        "table1:sampling:pope:adversarial:s48",
+        "table1:fox:pope:adversarial:s48",
+        "table1:sampling:pope:adversarial:s49",
+        "table1:fox:pope:adversarial:s49",
+        "table1:sampling:pope:adversarial:s50",
+        "table1:fox:pope:adversarial:s50",
+        "table1:sampling:pope:adversarial:s51",
+        "table1:fox:pope:adversarial:s51"
       ],
-      "est_hours": 8.56
+      "est_hours": 8.25
     },
     {
       "session": 3,
       "jobs": [
-        "table2:vcd:chair:val2014_500",
-        "controls:fox:chair:val2014_500:off",
-        "table1:vcd:pope:popular",
-        "gamma_sweep:fox:pope:adversarial:g100",
-        "dtype_arms:fox:pope:adversarial:ldbf16"
+        "table2:sampling:chair:val2014_500:s43",
+        "table2:fox:chair:val2014_500:s43",
+        "table2:sampling:chair:val2014_500:s44",
+        "table2:fox:chair:val2014_500:s44",
+        "table2:sampling:chair:val2014_500:s45",
+        "table2:fox:chair:val2014_500:s45"
       ],
-      "est_hours": 9.17
+      "est_hours": 7.96
     },
     {
       "session": 4,
       "jobs": [
-        "table9:vcd:chair:val2014_500:greedy",
-        "controls:fox:chair:val2014_500:as_described",
-        "table1:vcd:pope:adversarial",
-        "gamma_sweep:fox:pope:adversarial:g1000",
-        "system_prompt:fox:pope:adversarial:spnone"
+        "table2:sampling:chair:val2014_500:s46",
+        "table2:fox:chair:val2014_500:s46",
+        "table2:sampling:chair:val2014_500:s47",
+        "table2:fox:chair:val2014_500:s47",
+        "table2:sampling:chair:val2014_500:s48",
+        "table2:fox:chair:val2014_500:s48"
       ],
-      "est_hours": 9.17
+      "est_hours": 7.96
     },
     {
       "session": 5,
       "jobs": [
-        "gamma_sweep:fox:chair:val2014_500:g100",
-        "controls:fox:chair:val2014_500:ulp_control",
-        "table1:fox:pope:random",
-        "gamma_sweep:fox:pope:adversarial:g10000",
-        "table7:fox:pope:adversarial:a1"
+        "table2:sampling:chair:val2014_500:s49",
+        "table2:fox:chair:val2014_500:s49",
+        "table2:sampling:chair:val2014_500:s50",
+        "table2:fox:chair:val2014_500:s50",
+        "table2:sampling:chair:val2014_500:s51",
+        "table2:fox:chair:val2014_500:s51",
+        "controls:fox:pope:adversarial:greedy:off"
       ],
-      "est_hours": 9.17
+      "est_hours": 8.88
     },
     {
       "session": 6,
       "jobs": [
-        "gamma_sweep:fox:chair:val2014_500:g1000",
-        "controls:fox:chair:val2014_500:noise_control",
-        "table1:fox:pope:popular",
-        "gamma_sweep:fox:pope:adversarial:g60000",
-        "table7:fox:pope:adversarial:a3"
+        "controls:fox:chair:val2014_500:greedy:off",
+        "controls:fox:pope:adversarial:greedy:as_described",
+        "controls:fox:chair:val2014_500:greedy:as_described",
+        "controls:fox:pope:adversarial:greedy:ulp_control",
+        "controls:fox:chair:val2014_500:greedy:ulp_control",
+        "controls:fox:pope:adversarial:greedy:noise_control",
+        "controls:fox:chair:val2014_500:greedy:noise_control"
       ],
-      "est_hours": 9.17
+      "est_hours": 8.81
     },
     {
       "session": 7,
       "jobs": [
-        "gamma_sweep:fox:chair:val2014_500:g10000",
-        "dtype_arms:fox:chair:val2014_500:ldfp32",
-        "table9:vcd:pope:random:greedy",
-        "boost_visual:fox:pope:adversarial:boost_visual:g4",
-        "table7:fox:pope:adversarial:a4"
+        "dtype_arms:fox:pope:adversarial:greedy:ldfp32",
+        "dtype_arms:fox:chair:val2014_500:greedy:ldfp32",
+        "dtype_arms:fox:pope:adversarial:greedy:ldbf16",
+        "dtype_arms:fox:chair:val2014_500:greedy:ldbf16",
+        "gamma_sweep:fox:chair:val2014_500:greedy:g100",
+        "gamma_sweep:fox:chair:val2014_500:greedy:g10000"
       ],
-      "est_hours": 9.17
+      "est_hours": 7.89
     },
     {
       "session": 8,
       "jobs": [
-        "gamma_sweep:fox:chair:val2014_500:g60000",
-        "dtype_arms:fox:chair:val2014_500:ldbf16",
+        "boost_visual:fox:chair:val2014_500:greedy:boost_visual:g4",
         "table1:sampling:pope:random",
-        "table9:sampling:pope:adversarial:greedy",
-        "table9:vcd:pope:popular:greedy",
-        "controls:fox:pope:adversarial:off"
+        "table1:fox:pope:random",
+        "table1:sampling:pope:popular",
+        "table1:fox:pope:popular",
+        "table1:sampling:pope:random:s43",
+        "table1:fox:pope:random:s43",
+        "table1:sampling:pope:popular:s43",
+        "table1:fox:pope:popular:s43",
+        "table1:sampling:pope:random:s44",
+        "table1:fox:pope:random:s44"
       ],
-      "est_hours": 9.17
+      "est_hours": 8.39
     },
     {
       "session": 9,
       "jobs": [
-        "fig9:fox:pope:adversarial:k0.25:n500",
-        "boost_visual:fox:chair:val2014_500:boost_visual:g2",
-        "table1:sampling:pope:popular",
-        "system_prompt:sampling:pope:adversarial:spnone",
-        "table9:vcd:pope:adversarial:greedy",
-        "controls:fox:pope:adversarial:as_described"
+        "table1:sampling:pope:popular:s44",
+        "table1:fox:pope:popular:s44",
+        "controls:fox:pope:adversarial:off",
+        "controls:fox:pope:adversarial:off:s43",
+        "controls:fox:pope:adversarial:off:s44",
+        "controls:fox:pope:adversarial:ulp_control",
+        "controls:fox:pope:adversarial:ulp_control:s43",
+        "controls:fox:pope:adversarial:ulp_control:s44",
+        "system_prompt:sampling:pope:adversarial:greedy:spnone",
+        "system_prompt:fox:pope:adversarial:greedy:spnone",
+        "prompt_ablation:sampling:pope:adversarial:greedy:wnewline"
       ],
-      "est_hours": 8.47
+      "est_hours": 8.71
     },
     {
       "session": 10,
       "jobs": [
-        "fig9:fox:pope:adversarial:k0.45:n500",
-        "boost_visual:fox:chair:val2014_500:boost_visual:g4",
-        "table9:sampling:pope:random:greedy",
-        "prompt_ablation:sampling:pope:adversarial:wnewline",
-        "table9:fox:pope:random:greedy",
-        "controls:fox:pope:adversarial:ulp_control"
+        "prompt_ablation:sampling:pope:adversarial:greedy:pope_v1",
+        "prompt_ablation:sampling:pope:adversarial:greedy:spllava_v1_spaced",
+        "table7:fox:pope:adversarial:greedy:a1",
+        "table7:fox:pope:adversarial:greedy:a4",
+        "fig9:fox:pope:adversarial:greedy:k0.25:n500",
+        "fig9:fox:pope:adversarial:greedy:k0.45:n500",
+        "fig9:fox:pope:adversarial:greedy:t0.1:n500",
+        "fig9:fox:pope:adversarial:greedy:t0.2:n500",
+        "table1:vcd:pope:adversarial",
+        "table2:vcd:chair:val2014_500"
       ],
-      "est_hours": 8.47
-    },
-    {
-      "session": 11,
-      "jobs": [
-        "fig9:fox:pope:adversarial:t0.1:n500",
-        "boost_visual:fox:chair:val2014_500:boost_visual:g8",
-        "table9:sampling:pope:popular:greedy",
-        "prompt_ablation:sampling:pope:adversarial:pope_v1",
-        "table9:fox:pope:popular:greedy",
-        "controls:fox:pope:adversarial:noise_control"
-      ],
-      "est_hours": 8.47
+      "est_hours": 5.79
     }
   ]
 }

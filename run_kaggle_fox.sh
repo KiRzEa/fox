@@ -3,10 +3,10 @@
 # Sessions are disjoint and cost-balanced, so several can run concurrently --
 # on separate accounts, or one after another on the same one.
 #
-#   local:   python3 -m foxrepro.bench.plan plan --sessions 11
-#            python3 -m foxrepro.bench.plan plan --sessions 11 \
+#   local:   python3 -m foxrepro.bench.plan plan --budget-hours 9
+#            python3 -m foxrepro.bench.plan plan --budget-hours 9 \
 #                    --calibrate <logs>/_job_times.tsv --round r2   (after session 1)
-#   Kaggle:  bash run_kaggle_fox.sh <N>        N = session number (1..11)
+#   Kaggle:  bash run_kaggle_fox.sh <N>        N = session number (1..10)
 #            DRY=1 bash run_kaggle_fox.sh <N>  print the commands only
 #            BUDGET=10 bash run_kaggle_fox.sh <N>     hours, default from the plan
 #

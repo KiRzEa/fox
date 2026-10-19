@@ -378,3 +378,189 @@ class TestPowerHelpers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestStudentT(unittest.TestCase):
+    """stats.py is stdlib-only, so the t distribution is implemented here.
+
+    Checked against published tables rather than against scipy, since scipy
+    is deliberately not a dependency of the CPU metrics path.
+    """
+
+    TABLE_95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571,
+                9: 2.262, 10: 2.228, 19: 2.093, 29: 2.045, 99: 1.984}
+
+    def test_two_sided_95_quantiles_match_the_table(self) -> None:
+        from foxrepro.bench.stats import t_for_confidence
+
+        for df, want in self.TABLE_95.items():
+            with self.subTest(df=df):
+                self.assertAlmostEqual(t_for_confidence(0.95, df), want, places=3)
+
+    def test_99_percent_quantiles_match_the_table(self) -> None:
+        from foxrepro.bench.stats import t_for_confidence
+
+        for df, want in {1: 63.657, 4: 4.604, 9: 3.250, 29: 2.756}.items():
+            with self.subTest(df=df):
+                self.assertAlmostEqual(t_for_confidence(0.99, df), want, places=3)
+
+    def test_large_df_approaches_the_normal(self) -> None:
+        from foxrepro.bench.stats import t_for_confidence, z_for_confidence
+
+        self.assertAlmostEqual(
+            t_for_confidence(0.95, 1e7), z_for_confidence(0.95), places=4
+        )
+
+    def test_the_small_sample_penalty_is_the_whole_point(self) -> None:
+        """At 3 seeds the multiplier is more than twice the normal one.
+
+        Using z where t belongs is how a three-seed interval ends up looking
+        as tight as a thirty-seed one.
+        """
+        from foxrepro.bench.stats import t_for_confidence, z_for_confidence
+
+        self.assertGreater(t_for_confidence(0.95, 2), 2 * z_for_confidence(0.95))
+
+    def test_sf_and_quantile_are_inverses(self) -> None:
+        from foxrepro.bench.stats import student_t_sf, t_for_confidence
+
+        for df in (1, 2, 4, 9, 30):
+            for conf in (0.80, 0.95, 0.99):
+                with self.subTest(df=df, conf=conf):
+                    t = t_for_confidence(conf, df)
+                    self.assertAlmostEqual(student_t_sf(t, df), 1 - conf, places=6)
+
+    def test_sf_is_symmetric_and_bounded(self) -> None:
+        from foxrepro.bench.stats import student_t_sf
+
+        self.assertAlmostEqual(student_t_sf(1.5, 7), student_t_sf(-1.5, 7), places=12)
+        self.assertEqual(student_t_sf(0.0, 7), 1.0)
+        self.assertEqual(student_t_sf(float("inf"), 7), 0.0)
+
+    def test_bad_arguments_are_rejected(self) -> None:
+        from foxrepro.bench.stats import student_t_sf, t_for_confidence
+
+        with self.assertRaises(ValueError):
+            student_t_sf(1.0, 0)
+        with self.assertRaises(ValueError):
+            t_for_confidence(1.0, 5)
+
+
+class TestSeedLevelComparison(unittest.TestCase):
+    """The interval a single-seed run cannot produce.
+
+    Every other interval in this module quantifies which ITEMS were sampled.
+    With do_sample=True there is a second source -- which GENERATION was
+    drawn -- and it is invisible to any one run. The plan replicates the
+    headline arms over ten seeds so this function has something to measure.
+    """
+
+    def test_a_single_seed_reports_no_interval_rather_than_a_narrow_one(self) -> None:
+        from foxrepro.bench.stats import seed_level_comparison
+
+        c = seed_level_comparison({42: 77.17}, {42: 81.40})
+        self.assertEqual(c.n_seeds, 1)
+        self.assertEqual(c.df, 0)
+        self.assertEqual(c.lo, -math.inf)
+        self.assertEqual(c.hi, math.inf)
+        self.assertIsNone(c.p_value)
+        self.assertFalse(c.significant)
+        self.assertAlmostEqual(c.mean_gap, 4.23, places=10)
+
+    def test_pairing_is_by_seed(self) -> None:
+        """Seed 43's fox against seed 42's baseline is not a paired gap."""
+        from foxrepro.bench.stats import seed_level_comparison
+
+        c = seed_level_comparison({42: 10.0, 43: 20.0}, {43: 25.0, 44: 99.0})
+        self.assertEqual(c.seeds, (43,))
+        self.assertEqual(c.gaps, (5.0,))
+
+    def test_no_shared_seed_raises_and_says_which_are_present(self) -> None:
+        from foxrepro.bench.stats import seed_level_comparison
+
+        with self.assertRaises(ValueError) as ctx:
+            seed_level_comparison({42: 1.0}, {43: 2.0}, "base", "fox")
+        self.assertIn("42", str(ctx.exception))
+        self.assertIn("43", str(ctx.exception))
+
+    def test_a_consistent_gap_is_significant_and_a_noisy_one_is_not(self) -> None:
+        from foxrepro.bench.stats import seed_level_comparison
+
+        seeds = list(range(42, 47))
+        tight = seed_level_comparison(
+            {s: 77.0 + 0.1 * i for i, s in enumerate(seeds)},
+            {s: 81.0 + 0.1 * i for i, s in enumerate(seeds)},
+        )
+        self.assertAlmostEqual(tight.mean_gap, 4.0, places=10)
+        self.assertAlmostEqual(tight.sd_gap, 0.0, places=12)
+        self.assertTrue(tight.significant)
+
+        noisy = seed_level_comparison(
+            {s: 77.0 for s in seeds},
+            {s: 77.0 + g for s, g in zip(seeds, (-6.0, 8.0, -4.0, 7.0, -3.0))},
+        )
+        self.assertAlmostEqual(noisy.mean_gap, 0.4, places=10)
+        self.assertFalse(noisy.significant)
+        self.assertGreater(noisy.p_value, 0.05)
+
+    def test_the_interval_uses_t_not_z(self) -> None:
+        """Three seeds, so the multiplier must be 4.303 and not 1.960."""
+        from foxrepro.bench.stats import seed_level_comparison
+
+        vals_a = {42: 0.0, 43: 0.0, 44: 0.0}
+        vals_b = {42: 1.0, 43: 2.0, 44: 3.0}      # gaps 1,2,3 -> mean 2, sd 1
+        c = seed_level_comparison(vals_a, vals_b)
+        se = 1.0 / math.sqrt(3)
+        self.assertAlmostEqual(c.hi - c.mean_gap, 4.3027 * se, places=3)
+
+    def test_best_of_respects_the_metric_direction(self) -> None:
+        """CHAIR is lower-is-better; accuracy is not.
+
+        This exists because the paper reports "the best results averaged over
+        10 independent runs" (C.2) without saying what "best" ranges over. If
+        it ranges over the runs, the comparable number from this side is a
+        best-of too, not a mean -- so both are reported and labelled.
+        """
+        from foxrepro.bench.stats import seed_level_comparison
+
+        acc = seed_level_comparison({42: 70.0, 43: 72.0}, {42: 80.0, 43: 85.0},
+                                    higher_is_better=True)
+        self.assertEqual((acc.best_a, acc.best_b), (72.0, 85.0))
+        self.assertAlmostEqual(acc.best_gap, 13.0, places=10)
+        self.assertAlmostEqual(acc.mean_gap, 11.5, places=10)
+
+        chair = seed_level_comparison({42: 57.0, 43: 59.0}, {42: 49.0, 43: 46.0},
+                                      higher_is_better=False)
+        self.assertEqual((chair.best_a, chair.best_b), (57.0, 46.0))
+        self.assertAlmostEqual(chair.best_gap, -11.0, places=10)
+        self.assertAlmostEqual(chair.mean_gap, -10.5, places=10)
+        # best-of flatters the method more than the mean does, in both cases
+        self.assertLess(chair.best_gap, chair.mean_gap)
+
+    def test_identical_gaps_every_seed_is_reported_without_a_fake_p(self) -> None:
+        """Greedy decoding is deterministic, so this is the expected shape."""
+        from foxrepro.bench.stats import seed_level_comparison
+
+        c = seed_level_comparison({42: 1.0, 43: 1.0}, {42: 3.0, 43: 3.0})
+        self.assertEqual(c.sd_gap, 0.0)
+        self.assertEqual(c.lo, c.hi)
+        self.assertEqual(c.p_value, 0.0)
+        self.assertEqual(c.t_stat, math.inf)
+
+    def test_covers_answers_the_paper_question_without_overclaiming(self) -> None:
+        from foxrepro.bench.stats import seed_level_comparison
+
+        c = seed_level_comparison(
+            {s: 0.0 for s in range(42, 47)},
+            {s: g for s, g in zip(range(42, 47), (4.0, 4.2, 4.4, 4.1, 4.3))},
+        )
+        self.assertTrue(c.covers(4.2))
+        self.assertFalse(c.covers(5.16))
+
+    def test_as_dict_is_json_ready(self) -> None:
+        import json
+
+        from foxrepro.bench.stats import seed_level_comparison
+
+        c = seed_level_comparison({42: 1.0, 43: 2.0}, {42: 3.0, 43: 5.0})
+        json.dumps(c.as_dict())

@@ -88,19 +88,24 @@ from foxrepro.data.loaders import DEFAULT_TEMPLATE_IDS
 
 __all__ = [
     "Job", "PLAN", "measured_cost", "scan_progress", "next_jobs", "render_plan",
-    "partition_jobs", "ingest_runs", "archive_runs",
+    "partition_jobs", "partition_by_priority", "pair_key",
+    "ingest_runs", "archive_runs",
 ]
 
-#: Seconds per sample, measured on 2x T4 with LLaVA-1.5-7B fp16 sharded.
-#: POPE: 608-token prefill, 1 token out. The dual-branch figure is the
-#: single-branch one doubled, because POPE is prefill-bound and the second
-#: branch doubles the prefill compute.
+#: Seconds per sample on 2x T4 with LLaVA-1.5-7B fp16 sharded. Measured, not
+#: scaled: these are session 1 round r2's wall times divided by the sample
+#: count (logs/_job_times_r2.tsv). The earlier figures were extrapolated from
+#: one short probe and ran 2.5x high on POPE, which inflated the whole plan.
+#:
+#: POPE is a 625-token prefill and 1 token out, so it is prefill-bound and the
+#: second branch roughly doubles it. CHAIR decodes ~120 tokens, and there the
+#: two branches batch, so dual costs well under 2x.
 COST_S: Dict[Tuple[str, str], float] = {
-    ("pope", "single"): 1.4,      # 1.315 measured, +5% for the system prompt
-    ("pope", "dual"): 2.8,
-    ("chair", "single"): 6.0,     # ~100 decode tokens at ~48 ms/token
-    ("chair", "dual"): 7.8,       # decode batches, so less than 2x
-    ("diag", "single"): 1.4,      # one prefill, no generation
+    ("pope", "single"): 0.55,     # 27.3 min / 3000
+    ("pope", "dual"): 1.10,       # 55.1 min / 3000
+    ("chair", "single"): 8.2,     # 68.4 min / 500
+    ("chair", "dual"): 10.9,      # 90.6 min / 500
+    ("diag", "single"): 0.55,     # one prefill, no generation
 }
 
 N_SAMPLES: Dict[Tuple[str, str], int] = {
@@ -168,6 +173,13 @@ class Job:
                       ("t", self.tau_js), ("a", self.alpha)):
             if v is not None:
                 bits.append(f"{nm}{v:g}")
+        if self.seed != 42:
+            # Without this, ten seeds of one job share a job_id: the frozen
+            # plan keeps one of them, progress tracking reports nine as
+            # pending forever, and --calibrate sums ten runs into one
+            # estimate. 42 is left bare so the ids session 1 already wrote to
+            # logs/_job_times_r*.tsv still match.
+            bits.append(f"s{self.seed}")
         if self.limit:
             bits.append(f"n{self.limit}")
         return ":".join(bits)
@@ -237,93 +249,164 @@ def _pope_splits() -> Sequence[str]:
     return BENCHMARK_SPLITS["pope"]
 
 
+#: Seeds for the arms that are actually stochastic.
+#:
+#: The paper's Tables 1 and 2 are "the best results averaged over 10
+#: independent runs" (C.2, verbatim), with significance from "a two-sided
+#: t-test (p < 0.05)" -- and no table anywhere reports a standard deviation,
+#: so that test cannot be checked. One seed per method here would reproduce
+#: the same weakness: an interval computed from a single run captures only
+#: which ITEMS are hard, never which GENERATION you happened to draw, and is
+#: therefore too narrow by an unknown amount.
+#:
+#: Ten for the two headline comparisons -- POPE-adversarial and CHAIR -- so
+#: "best of 10" can be matched on its own terms as well as by the mean. Three
+#: for breadth. All start at 42, the seed session 1 already spent.
+#:
+#: The sweeps below were trimmed to pay for this: two gamma values instead of
+#: four, one boost_visual delta instead of three, two alphas instead of three,
+#: one VCD seed instead of three. Those refine a result; seeds establish one.
+SEEDS_HEADLINE = (42, 43, 44, 45, 46, 47, 48, 49, 50, 51)
+SEEDS_BREADTH = (42, 43, 44)
+
+
 def _build_plan() -> List[Job]:
+    """The plan, in priority order rather than cost order.
+
+    Tiers, and why they are in this sequence:
+
+    1. **The greedy control.** The paper offers it as its own strongest
+       evidence: "These improvements persist without any sampling variance,
+       suggesting that the gains are not attributable to temperature tuning or
+       favorable sampling randomness, but stem from the proposed structural
+       intervention" (C.7). Session 1 already found CHAIR greedy gives a null.
+       POPE greedy is the other half and has never been run. Greedy is
+       deterministic and the paper's Table 9 is explicitly single-run ("we
+       omit averaged scores"), so this comparison needs no seeds on either
+       side -- the cheapest decisive evidence in the whole plan.
+    2. **Seed replication of the sampling headline.** Where the paper's claim
+       does hold, one seed is not an argument.
+    3. **The mechanism arms, under greedy.** The question is whether the -gamma
+       shift changes the output at all. Greedy answers it deterministically, so
+       these cost one run each instead of ten.
+    4. **Breadth**: the other POPE splits, and the mechanism arms under
+       sampling for the two controls that carry the account.
+    5. **Sweeps and VCD**, last, because they refine a result rather than
+       establish one.
+    """
     jobs: List[Job] = []
 
-    # --- Table 1 / 8: POPE accuracy and F1. Same runs feed both. ----------- #
-    for method in ("sampling", "vcd", "fox"):
-        for split in _pope_splits():
-            jobs.append(Job("table1", method, "pope", split,
-                            note="POPE accuracy (T1) and F1 (T8)"))
-
-    # --- Table 2: CHAIR ---------------------------------------------------- #
-    for method in ("sampling", "vcd", "fox"):
-        jobs.append(Job("table2", method, "chair", "val2014_500",
-                        note="CHAIR_S / CHAIR_I"))
-
-    # --- Table 9: the greedy control --------------------------------------- #
-    for method in ("sampling", "vcd", "fox"):
-        for split in _pope_splits():
-            jobs.append(Job("table9", method, "pope", split,
-                            decoding="greedy", note="greedy POPE"))
+    # ---- Tier 1: the greedy control, 1 seed, deterministic --------------- #
+    # CHAIR greedy ran in session 1 and stays in the plan: the plan is the
+    # record of what the project ran, and dropping a finished job would orphan
+    # its run file from progress tracking.
+    for method in ("sampling", "fox"):
         jobs.append(Job("table9", method, "chair", "val2014_500",
-                        decoding="greedy", note="greedy CHAIR"))
+                        decoding="greedy",
+                        note="greedy CHAIR -- done, session 1 r2"))
+    for split in _pope_splits():
+        for method in ("sampling", "fox"):
+            jobs.append(Job("table9", method, "pope", split,
+                            decoding="greedy",
+                            note="greedy POPE -- the paper's own control"))
 
-    # --- The mechanism audit: this repo's own contribution ----------------- #
-    # Gamma sweep. fp16 ULP at these magnitudes is 0.0625 / 0.5 / 8 / 32, a
-    # 512x span, so a response that tracks ULP rather than gamma is the
-    # signature of the requantization account. 1e5 overflows fp16 and is out.
-    for gamma in (1e2, 1e3, 1e4, 6e4):
-        jobs.append(Job("gamma_sweep", "fox", "pope", "adversarial",
-                        gamma=gamma, note=f"gamma={gamma:g}"))
+    # Greedy is only deterministic if nothing else in the path is random.
+    # Asserting that costs two short runs and converts the assumption this
+    # whole tier rests on into a measurement.
+    for bench, split in (("pope", "adversarial"), ("chair", "val2014_500")):
+        jobs.append(Job("determinism", "fox", bench, split, decoding="greedy",
+                        seed=997, limit=50,
+                        note="same inputs, different seed: outputs must match"))
+
+    # ---- Tier 2: seed replication, sampling ------------------------------ #
+    for seed in SEEDS_HEADLINE:
+        for method in ("sampling", "fox"):
+            jobs.append(Job("table1", method, "pope", "adversarial",
+                            seed=seed, note="POPE accuracy (T1) and F1 (T8)"))
+    # CHAIR_S has n=500 captions and resolves only 8.85 points. That is ITEM
+    # variance, which averaging seeds over the same 500 images cannot shrink --
+    # only more images would, and that would leave the paper's protocol. What
+    # the seeds do buy is the generation component of the PAIRED gap, and the
+    # ability to compare against a "best of 10" on its own terms. CHAIR is
+    # also where the abstract's headline lives ("29.1% over SID" is CHAIR_S),
+    # so it gets the same ten.
+    for seed in SEEDS_HEADLINE:
+        for method in ("sampling", "fox"):
+            jobs.append(Job("table2", method, "chair", "val2014_500",
+                            seed=seed, note="CHAIR_S / CHAIR_I"))
+
+    # ---- Tier 3: the mechanism audit, under greedy, 1 seed --------------- #
+    # off          : the fusion without the intervention
+    # as_described : Appendix B's version, biasing image keys only
+    # ulp_control  : the requantisation, explicitly, with no shift at all
+    # noise_control: matched-magnitude noise instead of a shift
+    # boost_visual : the intervention the paper argues from and never runs
+    for mode in ("off", "as_described", "ulp_control", "noise_control"):
+        for bench, split in (("pope", "adversarial"), ("chair", "val2014_500")):
+            jobs.append(Job("controls", "fox", bench, split, mode=mode,
+                            decoding="greedy", note=f"mode={mode}, greedy"))
+    for ld in ("fp32", "bf16"):
+        for bench, split in (("pope", "adversarial"), ("chair", "val2014_500")):
+            jobs.append(Job("dtype_arms", "fox", bench, split, logit_dtype=ld,
+                            decoding="greedy",
+                            note=f"logit_dtype={ld}, greedy"))
+    # fp16 ULP at these magnitudes is 0.0625 / 0.5 / 8 / 32, a 512x span. A
+    # response that tracks ULP rather than gamma is the signature of the
+    # requantisation account. 1e5 overflows fp16 and is out.
+    # Two values, not four: 1e2 and 1e4 are ULP 0.0625 and 8.0, a 128x span,
+    # which is the whole point. 1e3 and 6e4 only fill in the curve.
+    for gamma in (1e2, 1e4):
         jobs.append(Job("gamma_sweep", "fox", "chair", "val2014_500",
-                        gamma=gamma, note=f"gamma={gamma:g}, finer metric"))
-
-    # Control arms, on the hardest split and on CHAIR where the gain is largest.
-    # boost_visual is ours, not the paper's: it runs the intervention the
-    # paper argues from and never performs. Small gammas, because this is
-    # an attention bias meant to be felt, not a precision artifact.
-    for gamma in (2.0, 4.0, 8.0):
-        jobs.append(Job("boost_visual", "fox", "chair", "val2014_500",
-                        mode="boost_visual", gamma=gamma,
-                        note=f"amplify visual attention, delta={gamma:g}"))
-    jobs.append(Job("boost_visual", "fox", "pope", "adversarial",
-                    mode="boost_visual", gamma=4.0,
+                        gamma=gamma, decoding="greedy",
+                        note=f"gamma={gamma:g}, greedy"))
+    jobs.append(Job("boost_visual", "fox", "chair", "val2014_500",
+                    mode="boost_visual", gamma=4.0, decoding="greedy",
                     note="amplify visual attention, delta=4"))
 
-    for mode in ("off", "as_described", "ulp_control", "noise_control"):
-        jobs.append(Job("controls", "fox", "pope", "adversarial", mode=mode,
-                        note=f"mode={mode}"))
-        jobs.append(Job("controls", "fox", "chair", "val2014_500", mode=mode,
-                        note=f"mode={mode}"))
-
-    # Logit storage dtype: the axis the mechanism actually lives on.
-    for ld in ("fp32", "bf16"):
-        jobs.append(Job("dtype_arms", "fox", "pope", "adversarial",
-                        logit_dtype=ld, note=f"logit_dtype={ld}"))
-        jobs.append(Job("dtype_arms", "fox", "chair", "val2014_500",
-                        logit_dtype=ld, note=f"logit_dtype={ld}"))
-
+    # ---- Tier 4: breadth ------------------------------------------------- #
+    for seed in SEEDS_BREADTH:
+        for split in ("random", "popular"):
+            for method in ("sampling", "fox"):
+                jobs.append(Job("table1", method, "pope", split, seed=seed,
+                                note="POPE accuracy (T1) and F1 (T8)"))
+    # The two controls that carry the account, under the paper's own decoding.
+    for mode in ("off", "ulp_control"):
+        for seed in SEEDS_BREADTH:
+            jobs.append(Job("controls", "fox", "pope", "adversarial",
+                            mode=mode, seed=seed, note=f"mode={mode}, sampling"))
     # Does the paper's shortcut survive without a system prompt to anchor it?
     for method in ("sampling", "fox"):
         jobs.append(Job("system_prompt", method, "pope", "adversarial",
-                        system_prompt_id="none",
+                        system_prompt_id="none", decoding="greedy",
                         note="tests the X_sys anchor claim directly"))
-
-    # --- Prompt ablation: the ways session 1's prompt differed from the
-    # release. It ran with all of them present at once, which measured their
-    # sum (POPE-adversarial baseline 81.90 against the paper's 76.77). These
-    # isolate each one against the faithful baseline.
+    # The ways session 1 round r1's prompt differed from the release. r1 ran
+    # all of them at once, which measured their sum (POPE-adversarial baseline
+    # 81.90 against the paper's 76.77). These isolate them.
     for label, over in (
         ("newline", {"wrapper_id": "newline"}),
         ("single_word", {"prompt_template_id": "pope_v1"}),
         ("spaced_sysprompt", {"system_prompt_id": "llava_v1_spaced"}),
     ):
         jobs.append(Job("prompt_ablation", "sampling", "pope", "adversarial",
-                        note=f"faithful + {label}", **over))
+                        decoding="greedy", note=f"faithful + {label}", **over))
 
-    # --- Table 7: alpha ablation ------------------------------------------- #
-    for alpha in (1.0, 3.0, 4.0):   # 2.0 is the default, already covered
+    # ---- Tier 5: sweeps and VCD ------------------------------------------ #
+    for alpha in (1.0, 4.0):        # 2.0 is the default, already covered
         jobs.append(Job("table7", "fox", "pope", "adversarial", alpha=alpha,
-                        note=f"alpha={alpha:g}"))
-
-    # --- Figure 9: hyperparameter sensitivity, 500 samples as in the paper -- #
-    for k in (0.25, 0.45):          # 0.35 is the released default
+                        decoding="greedy", note=f"alpha={alpha:g}"))
+    for k in (0.25, 0.45):          # 0.35 is released; 0.45 is the PAPER's
         jobs.append(Job("fig9", "fox", "pope", "adversarial", k=k, limit=500,
-                        note=f"k={k:g}, 500 samples"))
-    for tau in (0.1, 0.2):          # 0.15 is the released default
+                        decoding="greedy", note=f"k={k:g}, 500 samples"))
+    for tau in (0.1, 0.2):          # 0.15 is released; 0.2 is the PAPER's
         jobs.append(Job("fig9", "fox", "pope", "adversarial", tau_js=tau,
-                        limit=500, note=f"tau_js={tau:g}, 500 samples"))
+                        limit=500, decoding="greedy",
+                        note=f"tau_js={tau:g}, 500 samples"))
+    # Labelled vcd-noise-fox-fusion, not VCD: what this repo can run is VCD's
+    # noised branch inside Fox's fusion. See docs/DEVIATIONS.md.
+    jobs.append(Job("table1", "vcd", "pope", "adversarial",
+                    note="VCD-noise arm, not VCD proper"))
+    jobs.append(Job("table2", "vcd", "chair", "val2014_500",
+                    note="VCD-noise arm, not VCD proper"))
 
     return jobs
 
@@ -464,6 +547,85 @@ def partition_jobs(n_sessions: int, jobs: Iterable[Job] = (),
     # job and got cut at 90%.
     rest = [sorted(b, key=lambda j: j.est_seconds()) for b in buckets]
     return [sorted(g, key=lambda j: j.est_seconds()) for g in pinned] + rest
+
+
+def pair_key(job: Job) -> Tuple:
+    """Jobs that must land in the same session: everything but the method.
+
+    A session that holds a baseline without its method, or the reverse, has
+    produced nothing comparable. Cost-balancing does not know that, so the
+    units it balances are these groups rather than individual jobs.
+
+    Seed is part of the key. Comparing seed 43's fox against seed 42's
+    baseline would mix the generation draw into the gap, which is exactly the
+    thing the seed replication exists to measure.
+    """
+    return (job.target, job.benchmark, job.split, job.decoding, job.seed,
+            job.mode, job.logit_dtype, job.system_prompt_id, job.wrapper_id,
+            job.prompt_template_id, job.gamma, job.k, job.tau_js, job.alpha,
+            job.limit)
+
+
+def partition_by_priority(
+    budget_hours: float, jobs: Iterable[Job] = (),
+    runs_root: Optional[Path] = None, skip_done: bool = True,
+) -> List[List[Job]]:
+    """Fill sessions in **plan order** until each reaches ``budget_hours``.
+
+    The alternative, :func:`partition_jobs`, minimises makespan and so is the
+    right choice when every job will be run. It is the wrong choice for a plan
+    whose first tier is the decisive experiment and whose last is a sweep:
+    longest-processing-time-first scatters the tiers across every session, so
+    no prefix of the sessions answers anything. Here session 1 is the highest
+    priority work that fits, session 2 the next, and stopping after any
+    session leaves a coherent result.
+
+    Already-finished jobs are dropped by default, so the sessions returned are
+    the work that remains rather than the work the plan ever described.
+
+    Args:
+        budget_hours: per-session wall budget.
+        jobs: defaults to :data:`PLAN`.
+        runs_root: where to look for completed runs.
+        skip_done: drop jobs whose run file is already complete.
+
+    Returns:
+        A list of sessions, each a list of jobs, in priority order.
+    """
+    if budget_hours <= 0:
+        raise ValueError("budget_hours must be > 0")
+    jobs = list(jobs) or PLAN
+
+    if skip_done:
+        rows = scan_progress(jobs, runs_root=runs_root)["rows"]
+        finished = {r["file"] for r in rows if r["complete"]}
+        jobs = [j for j in jobs if j.run_key().filename() not in finished]
+
+    # Group while preserving first-appearance order.
+    groups: Dict[Tuple, List[Job]] = {}
+    for job in jobs:
+        groups.setdefault(pair_key(job), []).append(job)
+
+    budget_s = budget_hours * 3600
+    sessions: List[List[Job]] = []
+    current: List[Job] = []
+    spent = 0.0
+    for group in groups.values():
+        cost = sum(j.est_seconds() for j in group)
+        if current and spent + cost > budget_s:
+            sessions.append(current)
+            current, spent = [], 0.0
+        current.extend(group)
+        spent += cost
+        # A single group larger than the budget cannot be split without
+        # splitting a comparison, so it gets a session of its own and the
+        # caller is told by the printed estimate rather than silently.
+        if spent >= budget_s:
+            sessions.append(current)
+            current, spent = [], 0.0
+    if current:
+        sessions.append(current)
+    return sessions
 
 
 def ingest_runs(
@@ -789,9 +951,10 @@ def archive_runs(
 
 
 def freeze_plan(
-    n_sessions: int, budget_hours: float, plan_path: Path,
+    n_sessions: Optional[int], budget_hours: float, plan_path: Path,
     calibrate: Optional[Path] = None, round_tag: str = "r1",
-    pilot: bool = False,
+    pilot: bool = False, order: str = "priority",
+    runs_root: Optional[Path] = None, skip_done: bool = True,
 ) -> Dict[str, object]:
     """Partition the plan and write it to disk.
 
@@ -833,10 +996,19 @@ def freeze_plan(
             measured[parts[0]] = measured.get(parts[0], 0.0) + minutes * 60.0
 
     jobs = PLAN
-    groups = partition_jobs(n_sessions, jobs, pilot=pilot)
+    if order == "priority":
+        groups = partition_by_priority(
+            budget_hours, jobs, runs_root=runs_root, skip_done=skip_done)
+    elif order == "balanced":
+        if n_sessions is None:
+            raise ValueError("--sessions is required with --order balanced")
+        groups = partition_jobs(n_sessions, jobs, pilot=pilot)
+    else:
+        raise ValueError("order must be 'priority' or 'balanced'")
     payload: Dict[str, object] = {
         "round": round_tag,
-        "n_sessions": n_sessions,
+        "order": order,
+        "n_sessions": len(groups),
         "budget_hours": budget_hours,
         "n_calibrated": len(measured),
         "jobs": {},
@@ -1021,7 +1193,17 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     a.add_argument("--json", action="store_true")
 
     a = sub.add_parser("plan", help="freeze the session split to a JSON file")
-    a.add_argument("--sessions", type=int, required=True)
+    a.add_argument(
+        "--order", choices=("priority", "balanced"), default="priority",
+        help="priority (default): fill sessions in plan order until each "
+             "reaches --budget-hours, so session 1 is the decisive work and "
+             "stopping after any session still leaves a coherent result. "
+             "balanced: minimise makespan over --sessions, which is the right "
+             "choice only when every job will be run.")
+    a.add_argument("--sessions", type=int, default=None,
+                   help="required with --order balanced; ignored otherwise")
+    a.add_argument("--include-done", action="store_true",
+                   help="keep finished jobs in the session list")
     a.add_argument("--budget-hours", type=float, default=10.0,
                    help="per session; Kaggle caps a session at 12 h")
     a.add_argument("--calibrate", type=Path, default=None,
@@ -1085,7 +1267,9 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     if cmd == "plan":
         payload = freeze_plan(args.sessions, args.budget_hours, args.out,
-                              args.calibrate, args.round, pilot=args.pilot)
+                              args.calibrate, args.round, pilot=args.pilot,
+                              order=args.order,
+                              skip_done=not args.include_done)
         print(f"# Wrote {args.out}  (round {payload['round']}, "
               f"{payload['n_calibrated']} calibrated estimates)\n")
         print("| session | jobs | est GPU-h |")
@@ -1099,7 +1283,8 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"| {sess['session']} | {len(sess['jobs'])} | "
                   f"{sess['est_hours']}{flag} |")
         total = sum(float(x["est_hours"]) for x in payload["sessions"])  # type: ignore[union-attr]
-        print(f"\nTotal ~{total:.0f} GPU-h over {args.sessions} sessions "
+        n = payload["n_sessions"]
+        print(f"\nTotal ~{total:.0f} GPU-h over {n} sessions "
               f"at {args.budget_hours} h each.")
         if over:
             need = -(-int(total) // int(args.budget_hours)) + 1
@@ -1112,7 +1297,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 f"exactly what was deferred."
             )
         print(f"\nOn Kaggle:  bash run_kaggle_fox.sh <N>   "
-              f"(N = 1..{args.sessions})")
+              f"(N = 1..{payload['n_sessions']})")
         return 0
     if cmd == "run":
         if args.tag:

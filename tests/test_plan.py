@@ -98,9 +98,14 @@ class TestPlanShape(unittest.TestCase):
             self.assertIn(t, targets)
 
     def test_gamma_sweep_spans_the_fp16_ulp_grid(self) -> None:
-        """0.0625 / 0.5 / 8 / 32 -- a 512x span, entirely inside fp16."""
+        """fp16 ULP at 1e2 and 1e4 is 0.0625 and 8.0 -- a 128x span.
+
+        Trimmed from four values to two to pay for ten-seed replication of
+        the headline arms: 1e3 and 6e4 fill in the curve, while the endpoints
+        are what distinguishes "responds to gamma" from "responds to ULP".
+        """
         gammas = sorted({j.gamma for j in PLAN if j.target == "gamma_sweep"})
-        self.assertEqual(gammas, [100.0, 1000.0, 10000.0, 60000.0])
+        self.assertEqual(gammas, [100.0, 10000.0])
 
     def test_gamma_sweep_excludes_the_overflowing_value(self) -> None:
         # 1e5 exceeds fp16's 65504 and becomes inf, so it is not a data point.
@@ -223,7 +228,7 @@ class TestFrozenPlan(unittest.TestCase):
         from foxrepro.bench.plan import freeze_plan
 
         out = self.tmp / "run_plan.json"
-        payload = freeze_plan(4, 10.5, out)
+        payload = freeze_plan(4, 10.5, out, skip_done=False)
         self.assertTrue(out.is_file())
         assigned = [j for s in payload["sessions"] for j in s["jobs"]]
         self.assertEqual(len(assigned), len(PLAN))
@@ -233,7 +238,7 @@ class TestFrozenPlan(unittest.TestCase):
     def test_frozen_commands_match_the_live_plan(self) -> None:
         from foxrepro.bench.plan import freeze_plan
 
-        payload = freeze_plan(3, 10.5, self.tmp / "p.json")
+        payload = freeze_plan(3, 10.5, self.tmp / "p.json", skip_done=False)
         live = {j.job_id(): j.command() for j in PLAN}
         for jid, rec in payload["jobs"].items():
             self.assertEqual(rec["command"], live[jid])
@@ -244,7 +249,8 @@ class TestFrozenPlan(unittest.TestCase):
         jid = PLAN[0].job_id()
         tsv = self.tmp / "_job_times.tsv"
         tsv.write_text(f"{jid}\t42.0\t0\nnot-a-job\tbroken\n")
-        payload = freeze_plan(2, 10.5, self.tmp / "p.json", calibrate=tsv)
+        payload = freeze_plan(2, 10.5, self.tmp / "p.json", calibrate=tsv,
+                              skip_done=False)
         self.assertEqual(payload["n_calibrated"], 1)
         self.assertEqual(payload["jobs"][jid]["est_s"], 42.0 * 60)
         self.assertTrue(payload["jobs"][jid]["measured"])
@@ -253,7 +259,7 @@ class TestFrozenPlan(unittest.TestCase):
         """If these drift, a session re-runs work another already finished."""
         from foxrepro.bench.plan import freeze_plan
 
-        payload = freeze_plan(2, 10.5, self.tmp / "p.json")
+        payload = freeze_plan(2, 10.5, self.tmp / "p.json", skip_done=False)
         for jid, rec in payload["jobs"].items():
             cmd = rec["command"]
             self.assertEqual(
@@ -267,7 +273,7 @@ class TestFrozenPlan(unittest.TestCase):
         from foxrepro.bench.plan import freeze_plan, run_session
 
         out = self.tmp / "p.json"
-        freeze_plan(2, 10.5, out)
+        freeze_plan(2, 10.5, out, skip_done=False)
         buf = io.StringIO()
         with redirect_stdout(buf):
             rc = run_session(1, out, dry_run=True)
@@ -278,7 +284,9 @@ class TestFrozenPlan(unittest.TestCase):
         from foxrepro.bench.plan import freeze_plan, run_session
 
         out = self.tmp / "p.json"
-        freeze_plan(2, 10.5, out)
+        # Pinned to two sessions, so session 9 is genuinely absent rather
+        # than merely beyond whatever the budget happened to produce.
+        freeze_plan(2, 10.5, out, order="balanced", skip_done=False)
         self.assertEqual(run_session(9, out, dry_run=True), 2)
 
 
@@ -399,7 +407,11 @@ class TestProgressActuallyCounts(unittest.TestCase):
     def test_measured_cost_reads_real_latencies(self) -> None:
         from foxrepro.bench.plan import measured_cost
 
-        self._fill(PLAN[0], 5)
+        # An explicit POPE job: PLAN[0] follows the plan's priority order,
+        # which starts with CHAIR, and this assertion is about POPE.
+        job = next(j for j in PLAN
+                   if j.benchmark == "pope" and j.method == "sampling")
+        self._fill(job, 5)
         cost = measured_cost(self.runs)
         self.assertIn("pope/single", cost)
         self.assertAlmostEqual(cost["pope/single"], 0.001, places=3)
@@ -539,15 +551,31 @@ class TestSessionBudget(unittest.TestCase):
         n = self._smallest_fitting()
         self.assertGreater(max(self._loads(n - 1)), self.WALL_HOURS)
 
-    def test_the_runner_default_matches_the_plan(self) -> None:
-        """``run_kaggle_fox.sh`` documents a session count; keep it honest."""
+    def test_the_runner_documents_a_budget_that_fits_the_wall(self) -> None:
+        """``run_kaggle_fox.sh`` documents --budget-hours; keep it honest."""
         import re
 
         script = (REPO_ROOT / "run_kaggle_fox.sh").read_text()
-        m = re.search(r"--sessions (\d+)", script)
-        self.assertIsNotNone(m, "run_kaggle_fox.sh no longer documents --sessions")
-        documented = int(m.group(1))  # type: ignore[union-attr]
-        self.assertLessEqual(max(self._loads(documented)), self.WALL_HOURS)
+        m = re.search(r"--budget-hours (\d+(?:\.\d+)?)", script)
+        self.assertIsNotNone(
+            m, "run_kaggle_fox.sh no longer documents --budget-hours")
+        budget = float(m.group(1))  # type: ignore[union-attr]
+        self.assertLessEqual(budget, self.WALL_HOURS)
+
+    def test_the_documented_session_count_matches_that_budget(self) -> None:
+        """The runner tells the user N = 1..k; k has to be the real k."""
+        import re
+
+        from foxrepro.bench.plan import partition_by_priority
+
+        script = (REPO_ROOT / "run_kaggle_fox.sh").read_text()
+        budget = float(re.search(r"--budget-hours (\d+(?:\.\d+)?)",
+                                 script).group(1))
+        claimed = int(re.search(r"N = session number \(1\.\.(\d+)\)",
+                                script).group(1))
+        actual = len(partition_by_priority(
+            budget, runs_root=REPO_ROOT / "results" / "runs"))
+        self.assertEqual(claimed, actual)
 
     def test_watchdog_fires_inside_the_budget(self) -> None:
         """A fixed 11.3 h deadline never fires in a 10 h session."""
@@ -745,8 +773,11 @@ class TestCalibrationLoader(unittest.TestCase):
 
         tsv = self.tmp / "_job_times.tsv"
         tsv.write_text(tsv_text)
-        return freeze_plan(11, 10.0, self.tmp / "plan.json",
-                           calibrate=tsv, pilot=True)
+        # order="balanced" and skip_done=False keep every job in the payload:
+        # this is a test of the calibration loader, not of the partitioner,
+        # and the priority order drops jobs that results/runs shows finished.
+        return freeze_plan(11, 10.0, self.tmp / "plan.json", calibrate=tsv,
+                           pilot=True, order="balanced", skip_done=False)
 
     def _est(self, payload: Dict[str, Any], job_id: str) -> float:
         return payload["jobs"][job_id]["est_s"]
@@ -829,3 +860,151 @@ class TestCalibrationLoader(unittest.TestCase):
             "table1:sampling:pope:adversarial\t30.1\tnot-a-code\n"
         )
         self.assertEqual(payload["n_calibrated"], 0)
+
+
+class TestSeedReplication(unittest.TestCase):
+    """One seed per method cannot support an interval over seeds.
+
+    The paper reports "the best results averaged over 10 independent runs"
+    (C.2) and prints no variance anywhere. Reproducing that shape -- a single
+    run with an interval that only sees item difficulty -- would reproduce its
+    weakness too, so the arms that carry the conclusion are replicated.
+    """
+
+    def _arm(self, target: str, benchmark: str, split: str, decoding: str,
+             method: str) -> list:
+        return [j for j in PLAN
+                if (j.target, j.benchmark, j.split, j.decoding, j.method)
+                == (target, benchmark, split, decoding, method)]
+
+    def test_the_headline_sampling_arms_have_ten_seeds(self) -> None:
+        from foxrepro.bench.plan import SEEDS_HEADLINE
+
+        self.assertEqual(len(SEEDS_HEADLINE), 10)
+        for target, bench, split in (
+            ("table1", "pope", "adversarial"),
+            ("table2", "chair", "val2014_500"),
+        ):
+            for method in ("sampling", "fox"):
+                with self.subTest(target=target, method=method):
+                    jobs = self._arm(target, bench, split, "sampling", method)
+                    self.assertEqual(
+                        sorted(j.seed for j in jobs), sorted(SEEDS_HEADLINE)
+                    )
+
+    def test_seed_42_is_first_so_session_one_counts(self) -> None:
+        """r2 already spent seed 42; it must not be orphaned."""
+        from foxrepro.bench.plan import SEEDS_BREADTH, SEEDS_HEADLINE
+
+        self.assertEqual(SEEDS_HEADLINE[0], 42)
+        self.assertEqual(SEEDS_BREADTH[0], 42)
+
+    def test_greedy_arms_are_not_replicated(self) -> None:
+        """Argmax is deterministic, so a second seed buys literally nothing.
+
+        The paper's Table 9 is single-run for the same reason ("we omit
+        averaged scores", C.7), so this is a match, not a shortcut.
+        """
+        for bench, split in (("pope", "adversarial"), ("chair", "val2014_500")):
+            for method in ("sampling", "fox"):
+                with self.subTest(bench=bench, method=method):
+                    jobs = self._arm("table9", bench, split, "greedy", method)
+                    self.assertEqual([j.seed for j in jobs], [42])
+
+    def test_the_determinism_claim_is_itself_tested(self) -> None:
+        """A whole tier rests on greedy being deterministic. Measure it."""
+        jobs = [j for j in PLAN if j.target == "determinism"]
+        self.assertTrue(jobs)
+        for j in jobs:
+            with self.subTest(job=j.job_id()):
+                self.assertEqual(j.decoding, "greedy")
+                self.assertNotEqual(j.seed, 42)   # the point is a DIFFERENT seed
+                self.assertTrue(j.limit and j.limit <= 100)
+
+    def test_the_seed_is_part_of_the_job_id(self) -> None:
+        """Otherwise ten seeds share one id and nine look permanently pending."""
+        ids = [j.job_id() for j in PLAN]
+        self.assertEqual(len(set(ids)), len(PLAN))
+
+    def test_seed_42_job_ids_are_unchanged(self) -> None:
+        """logs/_job_times_r*.tsv is keyed on them, so they must stay bare."""
+        job = next(j for j in PLAN
+                   if j.job_id() == "table1:fox:pope:adversarial")
+        self.assertEqual(job.seed, 42)
+        other = next(j for j in PLAN if j.target == "table1" and j.method == "fox"
+                     and j.split == "adversarial" and j.seed == 43)
+        self.assertEqual(other.job_id(), "table1:fox:pope:adversarial:s43")
+
+    def test_each_seed_gets_its_own_run_file(self) -> None:
+        names = {j.run_key().filename() for j in PLAN}
+        self.assertEqual(len(names), len(PLAN))
+
+
+class TestPriorityPartition(unittest.TestCase):
+    """Sessions in plan order, so stopping early still leaves an answer.
+
+    partition_jobs minimises makespan, which scatters the tiers across every
+    session: no prefix of the sessions then answers anything. That is the
+    right trade when all the work will be done and the wrong one here.
+    """
+
+    def test_sessions_respect_the_budget(self) -> None:
+        from foxrepro.bench.plan import partition_by_priority
+
+        sessions = partition_by_priority(9.0, skip_done=False)
+        self.assertTrue(sessions)
+        for i, g in enumerate(sessions[:-1], 1):
+            with self.subTest(session=i):
+                hours = sum(j.est_seconds() for j in g) / 3600
+                # A session may overshoot only by its last group, which
+                # cannot be split without splitting a comparison.
+                head = sum(j.est_seconds() for j in g[:-1]) / 3600
+                self.assertLessEqual(head, 9.0)
+                self.assertLess(hours, 12.0)
+
+    def test_every_job_appears_exactly_once(self) -> None:
+        from foxrepro.bench.plan import partition_by_priority
+
+        sessions = partition_by_priority(9.0, skip_done=False)
+        ids = [j.job_id() for g in sessions for j in g]
+        self.assertEqual(len(ids), len(PLAN))
+        self.assertEqual(len(set(ids)), len(PLAN))
+
+    def test_the_greedy_control_lands_in_session_one(self) -> None:
+        """It is the decisive experiment and the cheapest: 1 seed, no sampling."""
+        from foxrepro.bench.plan import partition_by_priority
+
+        first = partition_by_priority(9.0, skip_done=False)[0]
+        pope_greedy = [j for j in first
+                       if j.target == "table9" and j.benchmark == "pope"]
+        self.assertTrue(pope_greedy, "POPE greedy is not in session 1")
+
+    def test_a_baseline_never_lands_without_its_method(self) -> None:
+        from foxrepro.bench.plan import pair_key, partition_by_priority
+
+        sessions = partition_by_priority(9.0, skip_done=False)
+        where = {}
+        for i, g in enumerate(sessions):
+            for j in g:
+                where.setdefault(pair_key(j), set()).add(i)
+        for key, idxs in where.items():
+            with self.subTest(key=key):
+                self.assertEqual(len(idxs), 1, f"{key} split across {idxs}")
+
+    def test_finished_jobs_are_dropped(self) -> None:
+        from foxrepro.bench.plan import partition_by_priority
+
+        full = partition_by_priority(9.0, skip_done=False)
+        n_full = sum(len(g) for g in full)
+        pruned = partition_by_priority(
+            9.0, runs_root=REPO_ROOT / "results" / "runs", skip_done=True)
+        n_pruned = sum(len(g) for g in pruned)
+        # results/runs holds session 1's six finished jobs, under both rounds;
+        # only the r2 six match the current plan's prompt arm.
+        self.assertEqual(n_full - n_pruned, 6)
+
+    def test_a_zero_budget_is_rejected(self) -> None:
+        from foxrepro.bench.plan import partition_by_priority
+
+        with self.assertRaises(ValueError):
+            partition_by_priority(0.0)

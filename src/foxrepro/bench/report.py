@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 from foxrepro.bench.stats import (  # noqa: E402
+    seed_level_comparison,
     Comparison, compare_proportions, mcnemar_exact, paired_bootstrap_proportion,
     paired_bootstrap_ratio, power_table, resolvable_gap,
 )
@@ -124,6 +125,10 @@ class RunResult:
         return str(self.prov.get("decoding") or "sampling")
 
     @property
+    def seed(self) -> int:
+        return int(self.prov["seed"])
+
+    @property
     def prompt_arm(self) -> Dict[str, str]:
         """The prompt fields that make two runs of one job incomparable.
 
@@ -198,6 +203,55 @@ def load_results(
             ]
         out.append(RunResult(path, doc, rows))
     return out
+
+
+#: Metrics the across-seed section analyses, per benchmark:
+#: ``(key in metrics, label, higher_is_better)``.
+SEED_METRICS: Dict[str, Tuple[Tuple[str, str, bool], ...]] = {
+    "pope": (("accuracy", "accuracy", True), ("f1", "F1", True)),
+    "chair": (("chair_s", "CHAIR_S", False), ("chair_i", "CHAIR_I", False)),
+}
+
+
+def _metric_point(res: "RunResult", key: str) -> float:
+    """The point estimate, in percentage points."""
+    if res.benchmark == "chair":
+        return 100.0 * float(res.met["totals"][key])
+    return 100.0 * float(res.met[key]["point"])
+
+
+def group_by_seed(
+    results: Sequence[RunResult],
+) -> Dict[Tuple[str, str, str, str], Dict[int, RunResult]]:
+    """``(benchmark, split, decoding, method) -> {seed: result}``.
+
+    The seed is a first-class axis here rather than a duplicate to be
+    rejected, because replicating a run across seeds is the only way to see
+    the generation variance at all.
+    """
+    out: Dict[Tuple[str, str, str, str], Dict[int, RunResult]] = {}
+    for r in results:
+        key = (r.benchmark, r.split, r.decoding, r.method)
+        bucket = out.setdefault(key, {})
+        if r.seed in bucket:
+            raise ValueError(
+                f"two metrics files for {key} seed {r.seed}: "
+                f"{bucket[r.seed].metrics_path.name} and {r.metrics_path.name}"
+            )
+        bucket[r.seed] = r
+    return out
+
+
+def reference_seed(results: Sequence[RunResult]) -> Optional[int]:
+    """The seed the per-run tables are built from: the lowest present.
+
+    Those tables show one run each, with the within-run interval. Picking the
+    lowest seed makes the choice deterministic and reproducible rather than
+    dependent on filesystem order, and it is stated in the report. The
+    across-seed section is where the statistical claim is made.
+    """
+    seeds = {r.seed for r in results}
+    return min(seeds) if seeds else None
 
 
 def _index(results: Sequence[RunResult]) -> Dict[Tuple[str, str, str], RunResult]:
@@ -518,6 +572,163 @@ def render_provenance_audit(results: Sequence[RunResult]) -> str:
     return "\n".join(lines) + "\n"
 
 
+#: ``(benchmark, decoding) -> (PAPER_REFERENCE key, metric -> field)``.
+#: The paper's gap is computed from its own printed numbers, fox minus
+#: baseline, so nothing is typed in twice.
+_PAPER_FIELDS: Dict[Tuple[str, str], Tuple[str, Dict[str, str]]] = {
+    ("pope", "sampling"): ("table1_pope_accuracy", {"accuracy": "{split}"}),
+    ("chair", "sampling"): ("table2_chair", {"chair_s": "chair_s",
+                                             "chair_i": "chair_i"}),
+    ("pope", "greedy"): ("table9_greedy", {"accuracy": "{split}_acc",
+                                           "f1": "{split}_f1"}),
+    ("chair", "greedy"): ("table9_greedy", {"chair_s": "chair_s",
+                                            "chair_i": "chair_i"}),
+}
+
+
+def paper_gap(benchmark: str, split: str, decoding: str, metric: str,
+              baseline: str, method: str) -> Optional[float]:
+    """The paper's own gap for this cell, or None if it does not print one."""
+    entry = _PAPER_FIELDS.get((benchmark, decoding))
+    if entry is None:
+        return None
+    table_key, fields = entry
+    field_tmpl = fields.get(metric)
+    if field_tmpl is None:
+        return None
+    field = field_tmpl.format(split=split)
+    ref = PAPER_REFERENCE.get(table_key, {})
+    try:
+        return float(ref[method][field]) - float(ref[baseline][field])
+    except (KeyError, TypeError):
+        return None
+
+
+def render_seed_section(results: Sequence[RunResult], baseline: str,
+                        confidence: float = 0.95) -> str:
+    """The across-seed analysis: the report's actual statistical claim.
+
+    Every interval in the per-run tables is computed from one generation. It
+    quantifies which items were hard and nothing else. With
+    ``do_sample=True`` the gap also moves with the draw, and that component is
+    invisible to any single run, so a one-seed interval is too narrow by an
+    unknown amount. This section pairs the two methods seed by seed and puts a
+    Student-t interval on the mean of those paired gaps.
+
+    Two comparisons against the paper are printed, because the paper's
+    aggregation is ambiguous. C.2 says "the best results averaged over 10
+    independent runs" without saying what "best" ranges over:
+
+    * if it ranges over configurations, the comparable figure here is the
+      **mean gap**;
+    * if it ranges over the ten runs, the comparable figure is the
+      **best-of gap**, which flatters the method and is reported separately
+      rather than silently.
+
+    Args:
+        results: evaluated runs, one prompt arm, any number of seeds.
+        baseline: the method every gap is measured against.
+        confidence: coverage for the t-interval.
+
+    Returns:
+        A Markdown section.
+    """
+    grouped = group_by_seed(results)
+    lines = [
+        "### Across seeds",
+        "",
+        "`mean gap` pairs the two methods seed by seed and puts a Student-t "
+        "interval on the mean of those paired differences. That is the only "
+        "interval here that sees the generation draw; every interval in the "
+        "tables above is computed from a single run and quantifies item "
+        "difficulty alone.",
+        "",
+        "`best gap` is the best seed of each method differenced. It is "
+        "reported because the paper's aggregation is ambiguous -- C.2 says "
+        "\"the best results averaged over 10 independent runs\" without "
+        "saying what \"best\" ranges over. If it ranges over runs, `best "
+        "gap` is the comparable figure and `mean gap` is not.",
+        "",
+    ]
+
+    header = ["artefact", "method", "metric", "seeds",
+              f"{baseline} mean+-sd", "method mean+-sd",
+              "mean gap [95% CI]", "p", "best gap", "paper gap", "verdict"]
+    lines += ["| " + " | ".join(header) + " |",
+              "| " + " | ".join("---" for _ in header) + " |"]
+
+    any_row = False
+    for (bench, split, decoding, method) in sorted(grouped):
+        if method == baseline:
+            continue
+        base_runs = grouped.get((bench, split, decoding, baseline))
+        if not base_runs:
+            continue
+        runs = grouped[(bench, split, decoding, method)]
+        for key, label, higher in SEED_METRICS.get(bench, ()):
+            try:
+                cmp_ = seed_level_comparison(
+                    {sd: _metric_point(r, key) for sd, r in base_runs.items()},
+                    {sd: _metric_point(r, key) for sd, r in runs.items()},
+                    label_a=baseline, label_b=method,
+                    confidence=confidence, higher_is_better=higher,
+                )
+            except ValueError:
+                continue
+            any_row = True
+            pg = paper_gap(bench, split, decoding, key, baseline, method)
+            if cmp_.n_seeds < 2:
+                pval = "-"
+                if decoding == "greedy":
+                    # Nothing to replicate: argmax is deterministic, so the
+                    # per-run interval above is the whole uncertainty and one
+                    # run is the complete answer rather than a missing one.
+                    ci = "n/a -- deterministic"
+                    verdict = "see table above"
+                else:
+                    ci = "**one seed -- no interval**"
+                    verdict = "**not assessable**"
+            else:
+                ci = (f"{cmp_.mean_gap:+.2f} "
+                      f"[{cmp_.lo:+.2f}, {cmp_.hi:+.2f}]")
+                pval = f"{cmp_.p_value:.2g}"
+                if pg is None:
+                    verdict = ("resolved" if cmp_.significant
+                               else "not resolved")
+                elif not cmp_.significant:
+                    verdict = "**no effect resolved**"
+                elif cmp_.covers(pg):
+                    verdict = "reproduces"
+                else:
+                    verdict = "**excludes paper**"
+            lines.append("| " + " | ".join([
+                f"{bench}/{split} ({decoding})",
+                f"`{method}`",
+                label,
+                str(cmp_.n_seeds),
+                f"{cmp_.mean_a:.2f}+-{cmp_.sd_a:.2f}",
+                f"{cmp_.mean_b:.2f}+-{cmp_.sd_b:.2f}",
+                ci,
+                pval,
+                f"{cmp_.best_gap:+.2f}",
+                f"{pg:+.2f}" if pg is not None else "-",
+                verdict,
+            ]) + " |")
+
+    if not any_row:
+        return ("### Across seeds\n\n_no method has a baseline on the same "
+                "(benchmark, split, decoding) to pair against._\n")
+    lines += [
+        "",
+        "Greedy rows are expected to show `sd = 0`: argmax is deterministic, "
+        "so replicating a seed changes nothing and the paper's Table 9 is "
+        "single-run too (\"we omit averaged scores\", C.7). Their intervals "
+        "come from the per-run tables above, where item variance is the only "
+        "variance there is.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def _arm_note(system_prompt_id: Optional[str], wrapper_id: Optional[str],
               prompt_template_ids: Optional[Sequence[str]]) -> Optional[str]:
     """One line saying which prompt arm the tables below are built from.
@@ -550,8 +761,14 @@ def render_report(
         include_paper: add the paper's printed values for comparison.
         arm_note: one line naming the arm, from :func:`_arm_note`.
     """
-    sampling = [r for r in results if r.decoding == "sampling"]
-    greedy = [r for r in results if r.decoding == "greedy"]
+    # The per-run tables show one generation each, so they must show the
+    # same one for every method or their gaps mix seeds. The across-seed
+    # section is where several generations are actually combined.
+    ref_seed = reference_seed(results)
+    one_seed = [r for r in results if r.seed == ref_seed]
+    sampling = [r for r in one_seed if r.decoding == "sampling"]
+    greedy = [r for r in one_seed if r.decoding == "greedy"]
+    n_seeds = len({r.seed for r in results})
     parts = [
         "# Fox reproduction -- results",
         "",
@@ -563,6 +780,14 @@ def render_report(
     ]
     if arm_note:
         parts.extend([arm_note, ""])
+    if n_seeds > 1:
+        parts.extend([
+            f"The tables below are **seed {ref_seed} alone** "
+            f"(of {n_seeds} present), because a single run is what their "
+            "within-run intervals describe. The claim this report actually "
+            "makes is in **Across seeds**, further down.",
+            "",
+        ])
     if sampling:
         parts.append(render_pope_table(
             sampling, baseline, "Table 1 -- POPE (nucleus sampling, p=0.9, T=1.0)",
@@ -581,6 +806,8 @@ def render_report(
             greedy, baseline, "Table 9b -- CHAIR under greedy decoding (control)",
             "table9_greedy" if include_paper else None))
         parts.append("")
+    parts.append(render_seed_section(results, baseline))
+    parts.append("")
     parts.append(render_resolution_budget(results))
     parts.append("")
     parts.append(render_provenance_audit(results))

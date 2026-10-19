@@ -299,12 +299,16 @@ jobs, ~96 GPU-hours** — about three weeks of Kaggle's 30/week quota, split int
 Freeze the split once, locally, and commit it:
 
 ```bash
-python -m foxrepro.bench.plan plan --sessions 11 --pilot   # -> scripts/run_plan.json
+python -m foxrepro.bench.plan plan --budget-hours 9 \
+    --round r3 --calibrate logs/_job_times_r2.tsv   # -> scripts/run_plan.json
 ```
 
-`--pilot` pins session 1 rather than cost-balancing it, because
-cost-balancing would give it a baseline on one split and the method on another,
-leaving nothing comparable after ten GPU hours.
+Sessions are filled in **plan order** until each reaches the budget, not
+balanced for makespan. Makespan balancing scatters the tiers across every
+session, so no prefix of the sessions answers anything; here session 1 is the
+decisive work and stopping after any session leaves a coherent result. Jobs
+whose run file is already complete are dropped, so the list is the work that
+remains. `--order balanced --sessions N` restores the old behaviour.
 
 **Session 1 (7.3 h) answers one question: do the paper's numbers reproduce?**
 Baseline and method on each of the three main tables — POPE-adversarial

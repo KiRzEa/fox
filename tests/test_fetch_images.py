@@ -183,26 +183,85 @@ class TestSessionAwareFetch(unittest.TestCase):
     """
 
     def test_auto_reads_the_plan(self) -> None:
-        from foxrepro.data.fetch_images import _what_for_session
+        from foxrepro.data.fetch_images import _session_needs
         from foxrepro.storage import paths
 
         plan = paths().repo_root / "scripts" / "run_plan.json"
         if not plan.is_file():
             self.skipTest("no frozen plan in this checkout")
-        self.assertIn(_what_for_session(1, plan), ("pope", "chair", "union"))
-
-    def test_session_one_needs_both_benchmarks(self) -> None:
-        from foxrepro.data.fetch_images import _what_for_session
-        from foxrepro.storage import paths
-
-        plan = paths().repo_root / "scripts" / "run_plan.json"
-        if not plan.is_file():
-            self.skipTest("no frozen plan in this checkout")
-        self.assertEqual(_what_for_session(1, plan), "union")
+        what, _ = _session_needs(1, plan)
+        self.assertIn(what, ("pope", "chair", "union"))
 
     def test_an_unknown_session_fetches_everything(self) -> None:
-        """Guessing wrong costs a whole session; over-fetching costs 80 MB."""
-        from foxrepro.data.fetch_images import _what_for_session
+        """Guessing wrong costs a whole session; over-fetching costs minutes."""
+        from foxrepro.data.fetch_images import _session_needs
 
-        self.assertEqual(_what_for_session(99, Path("/nonexistent")), "union")
-        self.assertEqual(_what_for_session(None, None), "union")
+        self.assertEqual(_session_needs(99, Path("/nonexistent")), ("union", None))
+        self.assertEqual(_session_needs(None, None), ("union", None))
+
+    def test_a_session_fetches_only_the_chair_draws_it_runs(self) -> None:
+        """Every Kaggle session starts from an empty disk.
+
+        There is no carry-over between sessions, so over-fetching is not paid
+        once -- it is paid again in every session. With five CHAIR image lists
+        in the package, unioning all of them would make a session that scores
+        500 images download 2452.
+        """
+        import json
+
+        from foxrepro.data.fetch_images import _session_needs, needed_image_ids
+        from foxrepro.storage import paths
+
+        p = paths()
+        plan = p.repo_root / "scripts" / "run_plan.json"
+        if not plan.is_file():
+            self.skipTest("no frozen plan in this checkout")
+        doc = json.loads(plan.read_text())
+
+        everything = needed_image_ids(chair_splits=None)["chair"]
+        for sess in doc["sessions"]:
+            n = int(sess["session"])
+            want = {doc["jobs"][j]["id"].split(":")[3]
+                    for j in sess["jobs"]
+                    if doc["jobs"][j]["id"].split(":")[2] == "chair"}
+            what, splits = _session_needs(n, plan)
+            with self.subTest(session=n):
+                self.assertEqual(set(splits or ()), want)
+                got = needed_image_ids(chair_splits=splits)["chair"]
+                # The union of the lists this session actually scores. Draws
+                # are independent samples of ~40k images, so they overlap by
+                # a handful and the union is slightly under 500 per draw.
+                expect = set()
+                for sp in want:
+                    expect |= set(json.loads(
+                        p.chair_image_list_for(sp).read_text())["image_ids"])
+                self.assertEqual(got, expect)
+                self.assertLessEqual(len(got), len(everything))
+                if want:
+                    self.assertGreater(len(got), 450 * len(want))
+
+    def test_the_benchmarks_and_the_draws_are_decided_separately(self) -> None:
+        """A POPE-only session must not be handed a CHAIR list."""
+        import json
+
+        from foxrepro.data.fetch_images import _session_needs
+        from foxrepro.storage import paths
+
+        plan = paths().repo_root / "scripts" / "run_plan.json"
+        if not plan.is_file():
+            self.skipTest("no frozen plan in this checkout")
+        doc = json.loads(plan.read_text())
+        for sess in doc["sessions"]:
+            n = int(sess["session"])
+            benches = {doc["jobs"][j]["id"].split(":")[2] for j in sess["jobs"]}
+            what, splits = _session_needs(n, plan)
+            with self.subTest(session=n):
+                if benches == {"pope"}:
+                    self.assertEqual(what, "pope")
+                    self.assertEqual(splits, [])
+                elif benches == {"chair"}:
+                    self.assertEqual(what, "chair")
+                    self.assertTrue(splits)
+                else:
+                    self.assertEqual(what, "union")
+                    self.assertTrue(splits)

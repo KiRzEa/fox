@@ -93,12 +93,25 @@ def needed_image_ids(
     pope_dir: Optional[Path] = None,
     chair_list: Optional[Path] = None,
     splits: Sequence[str] = POPE_SPLITS,
+    chair_splits: Optional[Sequence[str]] = None,
 ) -> Dict[str, Set[int]]:
     """Which COCO ids POPE and CHAIR actually reference.
 
     Returns ``{"pope": {...}, "chair": {...}, "union": {...}}``. The POPE ids
     come from the shipped annotations, so this needs no network and no COCO
     download to answer.
+
+    Args:
+        pope_dir: POPE annotation directory.
+        chair_list: an explicit CHAIR id list, overriding ``chair_splits``.
+        splits: POPE splits to union.
+        chair_splits: which CHAIR draws to union. **Pass the session's own
+            splits.** Every Kaggle session starts from an empty disk and
+            re-downloads whatever it needs, so defaulting to all five draws
+            would make every session fetch 2452 CHAIR images when it uses 500
+            -- roughly 400 MB of waste per session, paid again each time.
+            ``None`` means all of them, which is the right answer only when
+            the caller genuinely does not know.
     """
     p = paths()
     pope_dir = pope_dir or p.pope_ann_dir
@@ -133,13 +146,15 @@ def needed_image_ids(
     if chair_list:
         chair_ids = _ids_from(Path(chair_list))
     else:
-        # Every CHAIR draw, not just the first. A session holding a
-        # val2014_500_d2 job would otherwise fetch the d0 images and fail at
-        # startup on the ones it actually needs -- the same shape of mismatch
-        # between the data step and the run step that killed four jobs in
-        # session 1. The lists ship with the package, so this needs no COCO
-        # download.
-        for split in BENCHMARK_SPLITS["chair"]:
+        # Exactly the draws asked for. Fetching the d0 list for a d2 job would
+        # fail at startup on images that were never downloaded -- the same
+        # mismatch between the data step and the run step that killed four
+        # jobs in session 1 -- and fetching all five would re-download 2000
+        # unused images in every session. The lists ship with the package, so
+        # resolving this needs no COCO download.
+        for split in (chair_splits
+                      if chair_splits is not None
+                      else BENCHMARK_SPLITS["chair"]):
             chair_ids |= _ids_from(p.chair_image_list_for(split))
 
     return {"pope": pope_ids, "chair": chair_ids,
@@ -277,30 +292,47 @@ def fetch_annotations(dest_dir: Path, *, timeout: int = 600) -> Dict[str, object
     return {"status": "ok", "dest": str(dest_dir), "extracted": extracted}
 
 
-def _what_for_session(session: Optional[int], plan_path: Optional[Path]) -> str:
-    """Which image set a session needs, read from the frozen plan.
+def _session_needs(
+    session: Optional[int], plan_path: Optional[Path]
+) -> Tuple[str, Optional[List[str]]]:
+    """``(what, chair_splits)`` for one session, read from the frozen plan.
 
-    Session 1 of the reproducibility plan mixes POPE and CHAIR jobs, and
-    fetching only POPE made all four CHAIR jobs fail within seconds of
-    starting. Deciding from the plan rather than from a hardcoded flag is the
-    fix: the data step and the run step then cannot disagree.
+    Two separate questions, and getting either wrong costs a session:
+
+    * **which benchmarks** -- fetching only POPE made all four CHAIR jobs of
+      the first real session fail within seconds of starting;
+    * **which CHAIR draws** -- there are five image lists now, and a Kaggle
+      session starts from an empty disk every time. Fetching all of them
+      would re-download about 400 MB of unused images per session, and
+      fetching the wrong one would fail at startup exactly like the first
+      case.
+
+    Returns ``(what, None)`` when there is no usable plan, which fetches
+    everything rather than guessing.
     """
     if session is None:
-        return "union"
+        return "union", None
     plan_path = plan_path or (paths().repo_root / "scripts" / "run_plan.json")
     try:
         plan = json.loads(Path(plan_path).read_text())
         ids = plan["sessions"][session - 1]["jobs"]
     except (OSError, KeyError, IndexError, json.JSONDecodeError):
-        # No plan, or a session that is not in it: fetch everything rather
-        # than guess, since a missing image set costs a whole session.
-        return "union"
-    benches = {plan["jobs"][j]["id"].split(":")[2] for j in ids}
+        return "union", None
+
+    benches: Set[str] = set()
+    chair_splits: Set[str] = set()
+    for j in ids:
+        parts = plan["jobs"][j]["id"].split(":")
+        bench, split = parts[2], parts[3]
+        benches.add(bench)
+        if bench == "chair":
+            chair_splits.add(split)
+    want = sorted(chair_splits) if chair_splits else []
     if benches == {"pope"}:
-        return "pope"
+        return "pope", want
     if benches == {"chair"}:
-        return "chair"
-    return "union"
+        return "chair", want
+    return "union", want
 
 
 def _main(argv: Optional[Sequence[str]] = None) -> int:
@@ -342,12 +374,14 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                     help="report what would be fetched and stop")
     args = ap.parse_args(argv)
 
-    sets = needed_image_ids(args.pope_dir, args.chair_list)
-
     what = args.what
+    chair_splits: Optional[List[str]] = None
     if what == "auto":
-        what = _what_for_session(args.session, args.plan)
-        print(f"[fetch] auto -> {what}")
+        what, chair_splits = _session_needs(args.session, args.plan)
+        note = f" chair_splits={','.join(chair_splits)}" if chair_splits else ""
+        print(f"[fetch] auto -> {what}{note}")
+    sets = needed_image_ids(args.pope_dir, args.chair_list,
+                            chair_splits=chair_splits)
     ids = sorted(sets[what])
     if not ids:
         print(

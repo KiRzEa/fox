@@ -35,16 +35,32 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 from foxrepro.bench.stats import (  # noqa: E402
-    seed_level_comparison,
+    holm_adjust, seed_level_comparison, tost_equivalence,
     Comparison, compare_proportions, mcnemar_exact, paired_bootstrap_proportion,
     paired_bootstrap_ratio, power_table, resolvable_gap,
 )
 from foxrepro.storage import paths  # noqa: E402
 
-__all__ = ["FLAG", "load_results", "render_report", "PAPER_REFERENCE"]
+__all__ = ["FLAG", "DEGENERACY_FLAG", "RECALL_DROP_FLAG",
+           "load_results", "render_report", "PAPER_REFERENCE"]
 
 #: Marker appended to a cell whose gap against the baseline is not resolvable.
 FLAG = "†"
+
+#: Marker for a CHAIR row whose recall collapsed relative to the baseline.
+DEGENERACY_FLAG = "⚠"
+
+#: Relative drop in object recall, against the baseline, at which a CHAIR
+#: improvement stops meaning better grounding.
+#:
+#: CHAIR_S is the fraction of captions containing at least one hallucinated
+#: object. A model that names fewer objects hallucinates fewer, so the metric
+#: can be driven down by saying less -- and one arm here does exactly that:
+#: ``--logit-dtype bf16`` scored CHAIR_S 25.60 against a 49.20 baseline while
+#: its recall fell from 79.23 to 59.81, its captions grew from 100 to 156
+#: words, and the objects it named CORRECTLY dropped from 1236 to 933. Read
+#: without recall beside it, that is a 24-point win. It is a failure.
+RECALL_DROP_FLAG = 0.10
 
 #: Values as printed in the paper for LLaVA-1.5, for the "paper" column.
 #: Table 1 prints accuracy only; Table 9 prints accuracy and F1.
@@ -482,7 +498,7 @@ def render_chair_table(
     results: Sequence[RunResult], baseline: str, title: str, paper_key: Optional[str]
 ) -> str:
     """Render the CHAIR table (paper Table 2 / the CHAIR half of Table 9)."""
-    rows = [r for r in results if r.benchmark == "chair"]
+    rows = bare_arms([r for r in results if r.benchmark == "chair"])
     index = _index(rows)
     methods = sorted({m for (_, _, m) in index})
     if not methods:
@@ -490,7 +506,7 @@ def render_chair_table(
 
     header = ["method", "CHAIR_S (lower better)", "CHAIR_S n (captions)",
               "CHAIR_I (lower better)", "CHAIR_I n (mentions)",
-              "recall", "F1", "mean words"]
+              "recall", "F1", "mean words", "correct objects"]
     lines = ["### " + title, "", "| " + " | ".join(header) + " |",
              "| " + " | ".join("---" for _ in header) + " |"]
     comparisons: List[str] = []
@@ -500,7 +516,12 @@ def render_chair_table(
         cs = res.met["chair_s_ci"]
         ci = res.met["chair_i_ci_cluster_bootstrap"]
         flag_s = flag_i = False
+        degenerate = False
         base = index.get(("chair", split, baseline))
+        if base is not None and method != baseline:
+            br = float(base.met["totals"]["recall"])
+            if br > 0 and (br - float(totals["recall"])) / br >= RECALL_DROP_FLAG:
+                degenerate = True
         if base is not None and method != baseline:
             cmp_s = _chair_s_comparison(res, base)
             cmp_i = _chair_i_comparison(res, base)
@@ -513,10 +534,22 @@ def render_chair_table(
             str(totals["chair_s_denominator"]),
             _cell(ci["point"], ci["ci_lo"], ci["ci_hi"], flag_i),
             str(totals["chair_i_denominator"]),
-            f"{100 * totals['recall']:.2f}",
+            f"{100 * totals['recall']:.2f}"
+            + (f" {DEGENERACY_FLAG}" if degenerate else ""),
             f"{100 * totals['f1']:.2f}",
             f"{totals['mean_caption_words']:.1f}",
+            str(totals["n_distinct_correct"]),
         ]) + " |")
+        if degenerate:
+            comparisons.append(
+                f"- {DEGENERACY_FLAG} `{method}`: recall "
+                f"{100 * totals['recall']:.2f} against the baseline's "
+                f"{100 * float(base.met['totals']['recall']):.2f}, and "
+                f"{totals['n_distinct_correct']} objects named correctly "
+                f"against {base.met['totals']['n_distinct_correct']}. Its "
+                f"CHAIR scores are **not** evidence of better grounding: a "
+                f"caption that names fewer objects hallucinates fewer."
+            )
 
     if paper_key:
         ref = PAPER_REFERENCE[paper_key]
@@ -721,11 +754,14 @@ def render_seed_section(results: Sequence[RunResult], baseline: str,
 
     header = ["artefact", "method", "metric", "seeds",
               f"{baseline} mean+-sd", "method mean+-sd",
-              "mean gap [95% CI]", "p", "best gap", "paper gap", "verdict"]
+              "mean gap [95% CI]", "p", "p (Holm)", "best gap",
+              "paper gap", "verdict"]
     lines += ["| " + " | ".join(header) + " |",
               "| " + " | ".join("---" for _ in header) + " |"]
 
     any_row = False
+    pending: List[List[str]] = []
+    raw_p: List[Optional[float]] = []
     for (bench, split, decoding, arm) in sorted(grouped):
         if arm == baseline:
             continue
@@ -774,7 +810,8 @@ def render_seed_section(results: Sequence[RunResult], baseline: str,
                     verdict = "reproduces"
                 else:
                     verdict = "**excludes paper**"
-            lines.append("| " + " | ".join([
+            raw_p.append(cmp_.p_value if cmp_.n_seeds >= 2 else None)
+            pending.append([
                 f"{bench}/{split} ({decoding})",
                 f"`{arm}`",
                 label,
@@ -783,15 +820,33 @@ def render_seed_section(results: Sequence[RunResult], baseline: str,
                 f"{cmp_.mean_b:.2f}+-{cmp_.sd_b:.2f}",
                 ci,
                 pval,
+                "",                       # filled in once the family is known
                 f"{cmp_.best_gap:+.2f}",
                 f"{pg:+.2f}" if pg is not None else "-",
                 verdict,
-            ]) + " |")
+            ])
 
     if not any_row:
         return ("### Across seeds\n\n_no method has a baseline on the same "
                 "(benchmark, split, decoding) to pair against._\n")
+
+    # Holm-Bonferroni over every comparison in this table. At alpha = 0.05 one
+    # comparison in twenty clears the bar on noise alone, and this report
+    # criticises the paper for an unverifiable significance claim -- it cannot
+    # then make an uncorrected one of its own.
+    adjusted = holm_adjust(raw_p)
+    for row, adj in zip(pending, adjusted):
+        if adj is None:
+            row[8] = "-"
+        else:
+            row[8] = f"{adj:.2g}" + ("" if adj < 0.05 else " **ns**")
+            if adj >= 0.05 and row[11] not in ("see table above",):
+                row[11] = "not resolved after Holm"
+    lines += ["| " + " | ".join(r) + " |" for r in pending]
     lines += [
+        "",
+        "`p (Holm)` is the Holm-Bonferroni adjustment over every row in this "
+        "table; `**ns**` marks a row that does not survive it. ",
         "",
         "Greedy rows are expected to show `sd = 0`: argmax is deterministic, "
         "so replicating a seed changes nothing and the paper's Table 9 is "
@@ -800,6 +855,169 @@ def render_seed_section(results: Sequence[RunResult], baseline: str,
         "variance there is.",
     ]
     return "\n".join(lines) + "\n"
+
+
+#: Equivalence margins, per metric, in percentage points.
+#:
+#: There is no neutral choice here -- an equivalence claim is a claim about a
+#: range, and the range is a judgement. These are set at roughly a tenth of
+#: the effect the paper reports for that metric, which is small enough that
+#: agreeing within it leaves no room for a second mechanism, and large enough
+#: to be reachable at ten seeds. They are stated in the report for that
+#: reason rather than buried.
+#:
+#:   POPE accuracy  +-0.50   against a claimed +5.16
+#:   POPE F1        +-0.50
+#:   CHAIR_S        +-2.00   against a claimed -11.20; n=500 makes this noisy
+#:   CHAIR_I        +-0.50   against a claimed -4.28
+EQUIVALENCE_MARGINS: Dict[str, float] = {
+    "accuracy": 0.50, "f1": 0.50, "chair_s": 2.00, "chair_i": 0.50,
+}
+
+
+def render_equivalence_section(
+    results: Sequence[RunResult], reference: str = "fox",
+    margins: Optional[Dict[str, float]] = None, alpha: float = 0.05,
+) -> str:
+    """TOST every replicated arm against ``reference``.
+
+    A large p-value from an ordinary difference test is not evidence that two
+    arms agree -- it is the probability of the data if they do, and it grows
+    when the measurement is noisy. Two seeds would give a larger p than ten.
+    The claim this project actually makes about ``ulp_control`` is the
+    positive one, that it does the same thing as ``fox``, and that claim needs
+    a test whose null is "they differ" rather than "they agree".
+
+    Args:
+        results: evaluated runs, one prompt arm.
+        reference: the arm every other is tested against.
+        margins: metric -> margin; defaults to :data:`EQUIVALENCE_MARGINS`.
+        alpha: level for each one-sided test.
+
+    Returns:
+        A Markdown section.
+    """
+    margins = margins or EQUIVALENCE_MARGINS
+    grouped = group_by_seed(results)
+    lines = [
+        "### Equivalence to `" + reference + "`",
+        "",
+        "Two one-sided tests (TOST). The null is that the arms differ by at "
+        "least the margin, so **rejecting it is positive evidence that they "
+        "do the same thing** -- unlike a large p from an ordinary difference "
+        "test, which only means the data could not tell them apart and gets "
+        "easier to obtain the noisier the measurement is.",
+        "",
+        "The margin is a judgement, not a default, and is printed with every "
+        "row. `smallest margin` is the tightest equivalence the data support "
+        "at this alpha.",
+        "",
+    ]
+    header = ["artefact", "arm", "metric", "seeds", "diff vs " + reference,
+              "90% CI", "margin", "TOST p", "smallest margin", "verdict"]
+    lines += ["| " + " | ".join(header) + " |",
+              "| " + " | ".join("---" for _ in header) + " |"]
+
+    rows = 0
+    for (bench, split, decoding, arm) in sorted(grouped):
+        if arm == reference:
+            continue
+        ref_runs = grouped.get((bench, split, decoding, reference))
+        if not ref_runs:
+            continue
+        runs = grouped[(bench, split, decoding, arm)]
+        for key, label, _ in SEED_METRICS.get(bench, ()):
+            a = {sd: _metric_point(r, key) for sd, r in ref_runs.items()}
+            b = {sd: _metric_point(r, key) for sd, r in runs.items()}
+            if len(set(a) & set(b)) < 2:
+                continue
+            margin = margins.get(key, 0.5)
+            try:
+                e = tost_equivalence(a, b, margin, reference, arm, alpha=alpha)
+            except ValueError:
+                continue
+            rows += 1
+            lo, hi = 1e-4, 100.0
+            for _ in range(60):
+                mid = 0.5 * (lo + hi)
+                if tost_equivalence(a, b, mid, alpha=alpha).equivalent:
+                    hi = mid
+                else:
+                    lo = mid
+            tightest = f"+-{hi:.2f}" if hi < 99.0 else "none"
+            lines.append("| " + " | ".join([
+                f"{bench}/{split} ({decoding})", f"`{arm}`", label,
+                str(e.n), f"{e.mean_diff:+.3f}",
+                f"[{e.ci_lo:+.3f}, {e.ci_hi:+.3f}]",
+                f"+-{margin:g}",
+                f"{e.p_value:.4f}" if e.p_value is not None else "-",
+                tightest,
+                "**equivalent**" if e.equivalent else "not shown",
+            ]) + " |")
+
+    if not rows:
+        return ("### Equivalence to `" + reference + "`\n\n_no replicated arm "
+                "shares a (benchmark, split, decoding) with it._\n")
+    return "\n".join(lines) + "\n"
+
+
+def render_degeneracy_warnings(results: Sequence[RunResult],
+                               baseline: str = "sampling") -> str:
+    """Flag every CHAIR arm whose recall collapsed, whatever table shows it.
+
+    CHAIR_S counts captions containing a hallucinated object, so naming fewer
+    objects lowers it. Two arms here exploit that without meaning to, and one
+    of them -- ``--logit-dtype bf16`` -- posts the largest CHAIR_S improvement
+    in the whole study while naming 300 fewer correct objects than the
+    baseline. A reader scanning for the biggest number would pick exactly the
+    worst arm, so the check runs over all of them rather than only the ones a
+    paper-comparison table happens to include.
+
+    Args:
+        results: evaluated runs.
+        baseline: the arm recall is compared against.
+
+    Returns:
+        A Markdown section, or an empty string when nothing is flagged.
+    """
+    grouped = group_by_seed([r for r in results if r.benchmark == "chair"])
+    out: List[str] = []
+    for (bench, split, decoding, arm) in sorted(grouped):
+        if arm == baseline:
+            continue
+        base = grouped.get((bench, split, decoding, baseline))
+        if not base:
+            continue
+        shared = sorted(set(base) & set(grouped[(bench, split, decoding, arm)]))
+        if not shared:
+            continue
+        def mean(runs, key):
+            return sum(float(runs[s].met["totals"][key]) for s in shared) / len(shared)
+        br = mean(base, "recall")
+        ar = mean(grouped[(bench, split, decoding, arm)], "recall")
+        if br <= 0 or (br - ar) / br < RECALL_DROP_FLAG:
+            continue
+        bc = mean(base, "n_distinct_correct")
+        ac = mean(grouped[(bench, split, decoding, arm)], "n_distinct_correct")
+        bw = mean(base, "mean_caption_words")
+        aw = mean(grouped[(bench, split, decoding, arm)], "mean_caption_words")
+        acs = mean(grouped[(bench, split, decoding, arm)], "chair_s")
+        bcs = mean(base, "chair_s")
+        out.append(
+            f"- {DEGENERACY_FLAG} **`{arm}`** on {bench}/{split} ({decoding}): "
+            f"CHAIR_S {100*acs:.2f} against {100*bcs:.2f}, which looks like a "
+            f"{100*(bcs-acs):+.2f} point win -- but recall fell "
+            f"{100*br:.2f} -> {100*ar:.2f}, correct objects {bc:.0f} -> "
+            f"{ac:.0f}, caption length {bw:.0f} -> {aw:.0f} words. "
+            f"It hallucinates less because it names less. Do not read its "
+            f"CHAIR scores as grounding."
+        )
+    if not out:
+        return ""
+    return "\n".join(
+        ["### Degenerate CHAIR arms", "",
+         "CHAIR without recall beside it is gameable, and these arms game it.",
+         ""] + out) + "\n"
 
 
 def _arm_note(system_prompt_id: Optional[str], wrapper_id: Optional[str],
@@ -881,6 +1099,11 @@ def render_report(
         parts.append("")
     parts.append(render_seed_section(results, baseline))
     parts.append("")
+    parts.append(render_equivalence_section(results))
+    parts.append("")
+    warn = render_degeneracy_warnings(results, baseline)
+    if warn:
+        parts.extend([warn, ""])
     parts.append(render_resolution_budget(results))
     parts.append("")
     parts.append(render_provenance_audit(results))

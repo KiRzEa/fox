@@ -564,3 +564,152 @@ class TestSeedLevelComparison(unittest.TestCase):
 
         c = seed_level_comparison({42: 1.0, 43: 2.0}, {42: 3.0, 43: 5.0})
         json.dumps(c.as_dict())
+
+
+class TestEquivalence(unittest.TestCase):
+    """A large p from a difference test is not evidence that two arms agree.
+
+    It is the probability of the data IF they agree, and it rises as the
+    measurement gets noisier -- two seeds give a larger p than ten. The claim
+    this project makes about ulp_control is the positive one, that it does the
+    same thing as fox, so it needs a test whose null is "they differ".
+    """
+
+    def test_a_tight_zero_difference_is_equivalent(self) -> None:
+        from foxrepro.bench.stats import tost_equivalence
+
+        a = {s: 80.0 for s in range(42, 52)}
+        b = {s: 80.0 + d for s, d in zip(range(42, 52),
+                                         (0.1, -0.1, 0.05, 0, -0.05,
+                                          0.1, -0.1, 0, 0.05, -0.05))}
+        e = tost_equivalence(a, b, margin=0.5, label_a="fox", label_b="ulp")
+        self.assertTrue(e.equivalent)
+        self.assertLess(e.p_value, 0.05)
+        self.assertIn("equivalent", e.verdict())
+
+    def test_noise_makes_equivalence_harder_not_easier(self) -> None:
+        """The property that distinguishes TOST from reading a large p.
+
+        Same mean difference of zero, twenty times the spread: the ordinary test
+        still fails to reject, but TOST correctly refuses to call it
+        equivalent.
+        """
+        from foxrepro.bench.stats import seed_level_comparison, tost_equivalence
+
+        seeds = range(42, 52)
+        small = (0.1, -0.1, 0.05, 0, -0.05, 0.1, -0.1, 0, 0.05, -0.05)
+        a = {s: 80.0 for s in seeds}
+        tight = {s: 80.0 + d for s, d in zip(seeds, small)}
+        loose = {s: 80.0 + 20 * d for s, d in zip(seeds, small)}
+
+        for arm in (tight, loose):
+            self.assertGreater(
+                seed_level_comparison(a, arm).p_value, 0.05,
+                "the difference test should fail to reject either way")
+        self.assertTrue(tost_equivalence(a, tight, 0.5).equivalent)
+        self.assertFalse(tost_equivalence(a, loose, 0.5).equivalent)
+
+    def test_a_real_difference_is_not_equivalent(self) -> None:
+        from foxrepro.bench.stats import tost_equivalence
+
+        a = {s: 80.0 for s in range(42, 52)}
+        b = {s: 83.0 + 0.01 * i for i, s in enumerate(range(42, 52))}
+        e = tost_equivalence(a, b, margin=0.5)
+        self.assertFalse(e.equivalent)
+        self.assertGreater(e.p_value, 0.05)
+        self.assertIn("NOT shown equivalent", e.verdict())
+
+    def test_a_wider_margin_is_easier_to_satisfy(self) -> None:
+        from foxrepro.bench.stats import tost_equivalence
+
+        a = {s: 80.0 for s in range(42, 52)}
+        b = {s: 80.4 + 0.01 * i for i, s in enumerate(range(42, 52))}
+        self.assertFalse(tost_equivalence(a, b, 0.25).equivalent)
+        self.assertTrue(tost_equivalence(a, b, 1.0).equivalent)
+
+    def test_the_interval_is_the_one_tost_corresponds_to(self) -> None:
+        """TOST at alpha matches a 1-2*alpha interval, not 1-alpha."""
+        from foxrepro.bench.stats import t_for_confidence, tost_equivalence
+        import math
+
+        a = {s: 80.0 for s in range(42, 52)}
+        b = {s: 80.0 + d for s, d in zip(range(42, 52),
+                                         (0.3, -0.2, 0.1, 0.0, -0.1,
+                                          0.2, -0.3, 0.1, 0.0, -0.1))}
+        e = tost_equivalence(a, b, 0.5, alpha=0.05)
+        se = e.sd_diff / math.sqrt(e.n)
+        self.assertAlmostEqual(e.ci_hi - e.mean_diff,
+                               t_for_confidence(0.90, e.df) * se, places=9)
+
+    def test_one_replicate_gives_no_verdict(self) -> None:
+        from foxrepro.bench.stats import tost_equivalence
+
+        e = tost_equivalence({42: 80.0}, {42: 80.0}, 0.5)
+        self.assertFalse(e.equivalent)
+        self.assertIsNone(e.p_value)
+        self.assertEqual(e.ci_lo, -math.inf)
+
+    def test_a_nonpositive_margin_is_rejected(self) -> None:
+        from foxrepro.bench.stats import tost_equivalence
+
+        for bad in (0.0, -1.0):
+            with self.assertRaises(ValueError):
+                tost_equivalence({42: 1.0, 43: 1.0}, {42: 1.0, 43: 1.0}, bad)
+
+
+class TestHolm(unittest.TestCase):
+    """This report makes dozens of comparisons and criticises the paper for
+    an unverifiable significance claim. It cannot make an uncorrected one."""
+
+    def test_matches_the_worked_example(self) -> None:
+        from foxrepro.bench.stats import holm_adjust
+
+        # p sorted: .01 x4, .02 x3, .03 x2, .04 x1
+        self.assertEqual(
+            [round(x, 10) for x in holm_adjust([0.01, 0.02, 0.03, 0.04])],
+            [0.04, 0.06, 0.06, 0.06],
+        )
+
+    def test_output_order_matches_input_order(self) -> None:
+        from foxrepro.bench.stats import holm_adjust
+
+        # sorted: 0.01 at rank 0 -> 2*0.01 = 0.02; 0.04 at rank 1 -> 1*0.04,
+        # kept monotone at max(0.02, 0.04) = 0.04.
+        self.assertEqual([round(x, 10) for x in holm_adjust([0.04, 0.01])],
+                         [0.04, 0.02])
+
+    def test_adjusted_values_are_monotone_and_capped(self) -> None:
+        from foxrepro.bench.stats import holm_adjust
+
+        raw = [0.001, 0.2, 0.4, 0.9, 0.02]
+        adj = holm_adjust(raw)
+        ranked = [a for _, a in sorted(zip(raw, adj))]
+        self.assertEqual(ranked, sorted(ranked))
+        self.assertTrue(all(a <= 1.0 for a in adj))
+
+    def test_it_never_makes_a_p_value_smaller(self) -> None:
+        from foxrepro.bench.stats import holm_adjust
+
+        raw = [0.001, 0.049, 0.05, 0.3]
+        for r, a in zip(raw, holm_adjust(raw)):
+            self.assertGreaterEqual(a, r)
+
+    def test_none_passes_through_and_is_not_counted(self) -> None:
+        """A one-seed row has no p-value and must not inflate the family."""
+        from foxrepro.bench.stats import holm_adjust
+
+        with_none = holm_adjust([0.01, None, 0.02])
+        without = holm_adjust([0.01, 0.02])
+        self.assertIsNone(with_none[1])
+        self.assertEqual([with_none[0], with_none[2]], without)
+
+    def test_a_single_comparison_is_unchanged(self) -> None:
+        from foxrepro.bench.stats import holm_adjust
+
+        self.assertEqual(holm_adjust([0.03]), [0.03])
+
+    def test_an_empty_family_is_not_an_error(self) -> None:
+        from foxrepro.bench.stats import holm_adjust
+
+        self.assertEqual(holm_adjust([]), [])
+        self.assertEqual(holm_adjust([None, None]), [None, None])

@@ -51,7 +51,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from foxrepro.data.loaders import image_filename_for_id, pope_file_for_split
-from foxrepro.storage import paths
+from foxrepro.storage import BENCHMARK_SPLITS, paths
 
 __all__ = [
     "COCO_IMAGE_URL",
@@ -121,14 +121,26 @@ def needed_image_ids(
                     pope_ids.add(name)
 
     chair_ids: Set[int] = set()
-    # p.chair_image_list falls back to the list shipped with the package,
-    # so CHAIR works in a fresh session with no COCO download.
-    chair_list = chair_list or p.chair_image_list
-    if chair_list and chair_list.is_file():
-        data = json.loads(chair_list.read_text())
+
+    def _ids_from(path: Path) -> Set[int]:
+        if not path.is_file():
+            return set()
+        data = json.loads(path.read_text())
         if isinstance(data, dict):
             data = data.get("image_ids", [])
-        chair_ids = {int(x) for x in data}
+        return {int(x) for x in data}
+
+    if chair_list:
+        chair_ids = _ids_from(Path(chair_list))
+    else:
+        # Every CHAIR draw, not just the first. A session holding a
+        # val2014_500_d2 job would otherwise fetch the d0 images and fail at
+        # startup on the ones it actually needs -- the same shape of mismatch
+        # between the data step and the run step that killed four jobs in
+        # session 1. The lists ship with the package, so this needs no COCO
+        # download.
+        for split in BENCHMARK_SPLITS["chair"]:
+            chair_ids |= _ids_from(p.chair_image_list_for(split))
 
     return {"pope": pope_ids, "chair": chair_ids,
             "union": pope_ids | chair_ids}
@@ -315,7 +327,8 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     )
     ap.add_argument("--dest", type=Path, default=p.coco_images_dir)
     ap.add_argument("--pope-dir", type=Path, default=p.pope_ann_dir)
-    ap.add_argument("--chair-list", type=Path, default=p.chair_image_list)
+    ap.add_argument("--chair-list", type=Path, default=None,
+                    help="default: the union of every CHAIR draw")
     ap.add_argument("--workers", type=int, default=8,
                     help="keep this modest; COCO is a free public mirror")
     ap.add_argument("--limit", type=int, default=None,

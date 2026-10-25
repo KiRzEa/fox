@@ -210,9 +210,23 @@ VARIANT_FIELDS: tuple[str, ...] = (
 MAX_NEW_TOKENS_DEFAULT: Dict[str, int] = {"pope": 1, "chair": 512}
 
 #: Benchmarks and their legal splits.
+#: Extra CHAIR splits, each an independent 500-image draw from val2014.
+#:
+#: The released ``char_eval.py`` does ``os.listdir(args.data_path)``, shuffles
+#: it, and keeps the first 500 -- where ``data_path`` defaults to
+#: ``/data-disk/only_test``, a directory that was never published. Which 500
+#: images produced the paper's CHAIR table therefore depends on that
+#: directory's contents and on the author's filesystem ordering, and cannot be
+#: recovered. Our CHAIR baseline sits 3.88 points from the paper's; our POPE
+#: baseline, which uses POPE's fixed official annotation files, sits 0.05 from
+#: it. These draws measure how much of that 3.88 is just the image set.
+CHAIR_DRAWS: tuple[str, ...] = (
+    "val2014_500_d1", "val2014_500_d2", "val2014_500_d3", "val2014_500_d4",
+)
+
 BENCHMARK_SPLITS: Dict[str, tuple[str, ...]] = {
     "pope": ("random", "popular", "adversarial"),
-    "chair": ("val2014_500",),
+    "chair": ("val2014_500",) + CHAIR_DRAWS,
 }
 
 
@@ -391,10 +405,27 @@ class Paths:
         without it the CHAIR jobs fail at startup -- which is exactly what
         happened on the first real session.
         """
-        local = self.data_root / "chair_images.json"
+        return self.chair_image_list_for("val2014_500")
+
+    def chair_image_list_for(self, split: str) -> Path:
+        """The image-id list for one CHAIR split.
+
+        ``val2014_500`` is the original draw; ``val2014_500_dN`` are the
+        image-set sensitivity draws (see :data:`CHAIR_DRAWS`). Each has its own
+        file, and the split name is what selects it -- so a run's provenance
+        records which 500 images it scored, which the released code cannot.
+        """
+        if split not in BENCHMARK_SPLITS["chair"]:
+            raise ValueError(
+                f"unknown CHAIR split {split!r}; "
+                f"known: {BENCHMARK_SPLITS['chair']}"
+            )
+        suffix = "" if split == "val2014_500" else split[len("val2014_500"):]
+        name = f"chair_images{suffix}.json"
+        local = self.data_root / name
         if local.is_file():
             return local
-        return self.pkg_root / "assets" / "chair_images.json"
+        return self.pkg_root / "assets" / name
 
     @property
     def tmp_dir(self) -> Path:

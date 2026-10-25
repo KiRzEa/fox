@@ -71,6 +71,10 @@ __all__ = [
     "t_for_confidence",
     "SeedComparison",
     "seed_level_comparison",
+    "student_t_cdf",
+    "Equivalence",
+    "tost_equivalence",
+    "holm_adjust",
 ]
 
 _ND = NormalDist()
@@ -989,3 +993,196 @@ def seed_level_comparison(
         method=(f"paired Student-t over {n} seeds (df={n - 1})"
                 if n >= 2 else "single seed: no across-seed interval"),
     )
+
+
+# --------------------------------------------------------------------------- #
+# equivalence
+# --------------------------------------------------------------------------- #
+# A large p-value is not evidence that two arms agree. It is the probability
+# of the data under the hypothesis that they agree, and it rises when the
+# measurement is noisy -- two seeds would give a higher p than ten. "We failed
+# to find a difference" and "we found there is no difference" are different
+# claims, and the central result of this project is the second one: that
+# ``fox`` and ``ulp_control`` do the same thing, so the intervention adds
+# nothing beyond its own rounding.
+#
+# TOST (two one-sided tests) states that claim as something that can be
+# rejected. Instead of H0 "the arms are equal", it takes H0 "the arms differ
+# by at least the margin" and tries to reject it from both sides. Rejecting
+# gives positive evidence of equivalence, and -- unlike a large p -- a noisy
+# measurement makes it HARDER rather than easier to claim.
+
+
+def student_t_cdf(t: float, df: float) -> float:
+    """``P(T <= t)`` for Student's t, from the two-sided tail."""
+    half = student_t_sf(t, df) / 2.0
+    return 1.0 - half if t >= 0 else half
+
+
+@dataclass(frozen=True)
+class Equivalence:
+    """Result of a paired TOST.
+
+    Attributes:
+        label_a / label_b: arm names.
+        margin: the equivalence margin, in the metric's own units. Equivalence
+            is a claim about a range, never about exact identity, so this
+            number is part of the result and not a hidden default.
+        mean_diff / sd_diff / n / df: the paired differences.
+        ci_lo / ci_hi: the ``1 - 2*alpha`` interval, which is the one TOST
+            corresponds to -- a 90% interval at alpha = 0.05, not 95%.
+        p_lower: one-sided test of ``diff <= -margin``.
+        p_upper: one-sided test of ``diff >= +margin``.
+        p_value: ``max(p_lower, p_upper)``, the TOST p-value.
+        equivalent: whether both one-sided tests reject at ``alpha``.
+        alpha: significance level for each one-sided test.
+    """
+
+    label_a: str
+    label_b: str
+    margin: float
+    mean_diff: float
+    sd_diff: float
+    n: int
+    df: int
+    ci_lo: float
+    ci_hi: float
+    p_lower: Optional[float]
+    p_upper: Optional[float]
+    p_value: Optional[float]
+    equivalent: bool
+    alpha: float
+
+    def verdict(self) -> str:
+        if self.p_value is None:
+            return (f"{self.label_a} vs {self.label_b}: too few replicates "
+                    f"for an equivalence test")
+        if self.equivalent:
+            return (f"{self.label_a} and {self.label_b} are equivalent within "
+                    f"+-{self.margin:g} (TOST p={self.p_value:.3g}; "
+                    f"diff {self.mean_diff:+.3f} "
+                    f"[{self.ci_lo:+.3f}, {self.ci_hi:+.3f}])")
+        return (f"{self.label_a} vs {self.label_b}: NOT shown equivalent "
+                f"within +-{self.margin:g} (TOST p={self.p_value:.3g}; "
+                f"diff {self.mean_diff:+.3f} "
+                f"[{self.ci_lo:+.3f}, {self.ci_hi:+.3f}])")
+
+    def as_dict(self) -> Dict[str, object]:
+        return {
+            "label_a": self.label_a, "label_b": self.label_b,
+            "margin": self.margin, "mean_diff": self.mean_diff,
+            "sd_diff": self.sd_diff, "n": self.n, "df": self.df,
+            "ci_lo": self.ci_lo, "ci_hi": self.ci_hi,
+            "p_lower": self.p_lower, "p_upper": self.p_upper,
+            "p_value": self.p_value, "equivalent": self.equivalent,
+            "alpha": self.alpha, "test": "paired TOST (two one-sided t-tests)",
+        }
+
+
+def tost_equivalence(
+    values_a: Dict[int, float], values_b: Dict[int, float], margin: float,
+    label_a: str = "A", label_b: str = "B", alpha: float = 0.05,
+) -> Equivalence:
+    """Paired two one-sided tests for equivalence within ``margin``.
+
+    Args:
+        values_a / values_b: ``seed -> metric``, paired by seed as in
+            :func:`seed_level_comparison`.
+        margin: the largest difference that would still count as "the same",
+            in the metric's units. There is no principled default -- it is a
+            judgement about what matters, and the caller has to make it.
+        label_a / label_b: arm names.
+        alpha: level for EACH one-sided test. The corresponding interval is
+            ``1 - 2*alpha``.
+
+    Returns:
+        An :class:`Equivalence`.
+
+    Raises:
+        ValueError: if ``margin <= 0`` or no seed ran both arms.
+    """
+    if margin <= 0:
+        raise ValueError(f"margin must be > 0, got {margin}")
+    seeds = sorted(set(values_a) & set(values_b))
+    if not seeds:
+        raise ValueError(
+            f"no seed ran both {label_a!r} and {label_b!r}: "
+            f"{label_a} has {sorted(values_a)}, {label_b} has {sorted(values_b)}"
+        )
+    diffs = [values_b[s] - values_a[s] for s in seeds]
+    n = len(diffs)
+    mean_diff = sum(diffs) / n
+    sd_diff = _sd(diffs)
+
+    if n < 2:
+        return Equivalence(
+            label_a=label_a, label_b=label_b, margin=margin,
+            mean_diff=mean_diff, sd_diff=sd_diff, n=n, df=0,
+            ci_lo=-math.inf, ci_hi=math.inf,
+            p_lower=None, p_upper=None, p_value=None,
+            equivalent=False, alpha=alpha,
+        )
+
+    df = n - 1
+    se = sd_diff / math.sqrt(n)
+    if se == 0.0:
+        # Every replicate gave the identical difference. Equivalence is then
+        # decided by the point estimate alone, and claiming p = 0 would be a
+        # statement about a spread that was never observed.
+        inside = abs(mean_diff) < margin
+        return Equivalence(
+            label_a=label_a, label_b=label_b, margin=margin,
+            mean_diff=mean_diff, sd_diff=0.0, n=n, df=df,
+            ci_lo=mean_diff, ci_hi=mean_diff,
+            p_lower=0.0 if inside else 1.0,
+            p_upper=0.0 if inside else 1.0,
+            p_value=0.0 if inside else 1.0,
+            equivalent=inside, alpha=alpha,
+        )
+
+    # H0_lower: diff <= -margin, rejected when the diff is far enough ABOVE it.
+    p_lower = 1.0 - student_t_cdf((mean_diff + margin) / se, df)
+    # H0_upper: diff >= +margin, rejected when the diff is far enough BELOW it.
+    p_upper = student_t_cdf((mean_diff - margin) / se, df)
+    p_value = max(p_lower, p_upper)
+
+    crit = t_for_confidence(1.0 - 2.0 * alpha, df)
+    return Equivalence(
+        label_a=label_a, label_b=label_b, margin=margin,
+        mean_diff=mean_diff, sd_diff=sd_diff, n=n, df=df,
+        ci_lo=mean_diff - crit * se, ci_hi=mean_diff + crit * se,
+        p_lower=p_lower, p_upper=p_upper, p_value=p_value,
+        equivalent=p_value < alpha, alpha=alpha,
+    )
+
+
+def holm_adjust(pvalues: Sequence[Optional[float]]) -> List[Optional[float]]:
+    """Holm-Bonferroni step-down adjustment, order preserved.
+
+    This report makes dozens of comparisons. At alpha = 0.05 roughly one in
+    twenty will clear the bar with nothing behind it, and criticising a paper
+    for an unverifiable significance claim while making that mistake would be
+    hard to defend. Holm controls the family-wise error rate, is uniformly
+    more powerful than Bonferroni, and needs no independence assumption --
+    which matters, since these comparisons share a baseline and are correlated.
+
+    Args:
+        pvalues: raw p-values; ``None`` entries pass through untouched and do
+            not count toward the family size.
+
+    Returns:
+        Adjusted p-values, in the input order, each capped at 1.0 and made
+        monotone non-decreasing in rank.
+    """
+    idx = [i for i, p in enumerate(pvalues) if p is not None]
+    m = len(idx)
+    out: List[Optional[float]] = list(pvalues)
+    if m == 0:
+        return out
+    order = sorted(idx, key=lambda i: pvalues[i])  # type: ignore[index]
+    running = 0.0
+    for rank, i in enumerate(order):
+        adj = (m - rank) * float(pvalues[i])  # type: ignore[arg-type]
+        running = max(running, min(1.0, adj))
+        out[i] = running
+    return out

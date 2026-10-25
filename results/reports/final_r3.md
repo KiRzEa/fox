@@ -36,13 +36,11 @@ Paper-reported accuracy (LLaVA-1.5), for reference:
 
 ### Table 2 -- CHAIR (500 COCO val2014 images)
 
-| method | CHAIR_S (lower better) | CHAIR_S n (captions) | CHAIR_I (lower better) | CHAIR_I n (mentions) | recall | F1 | mean words |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `fox` | 49.60 [45.24, 53.97] | 500 | 14.08 [12.49, 15.71] | 3829 | 76.35 | 75.31 | 96.3 |
-| `fox off` | 49.00 [44.64, 53.37] | 500 | 14.23 [12.65, 15.85] | 3683 | 78.14 | 75.97 | 100.0 |
-| `fox ulp_control` | 45.20 [40.89, 49.58] | 500 | 12.96 [11.46, 14.51] | 3797 | 77.05 | 76.12 | 97.0 |
-| `sampling` | 56.80 [52.42, 61.07] | 500 | 18.14 [16.56, 19.78] | 3599 | 76.09 | 72.40 | 102.5 |
-| `vcd` | 41.60 [37.36, 45.97] | 500 | 14.84 [13.02, 16.67] | 3106 | 66.35 | 70.99 | 95.3 |
+| method | CHAIR_S (lower better) | CHAIR_S n (captions) | CHAIR_I (lower better) | CHAIR_I n (mentions) | recall | F1 | mean words | correct objects |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `fox` | 49.60 [45.24, 53.97] | 500 | 14.08 [12.49, 15.71] | 3829 | 76.35 | 75.31 | 96.3 | 1191 |
+| `sampling` | 56.80 [52.42, 61.07] | 500 | 18.14 [16.56, 19.78] | 3599 | 76.09 | 72.40 | 102.5 | 1187 |
+| `vcd` | 41.60 [37.36, 45.97] | 500 | 14.84 [13.02, 16.67] | 3106 | 66.35 ⚠ | 70.99 | 95.3 | 1035 |
 
 Paper-reported CHAIR (LLaVA-1.5), for reference:
 
@@ -62,12 +60,9 @@ _The paper states neither CHAIR_I's denominator (total mentioned object instance
 
 - CHAIR_S: fox vs sampling: gap -7.20 pts, 95% CI [-12.00, -2.40] -- distinguishable  _[paired percentile bootstrap (B=10000, seed=20260101)]_
 - CHAIR_I: fox vs sampling: gap -4.07 pts, 95% CI [-5.79, -2.32] -- distinguishable  _[paired cluster bootstrap on ratio of sums (B=10000, seed=20260101)]_
-- CHAIR_S: fox vs sampling: gap -7.80 pts, 95% CI [-12.60, -2.80] -- distinguishable  _[paired percentile bootstrap (B=10000, seed=20260101)]_
-- CHAIR_I: fox vs sampling: gap -3.92 pts, 95% CI [-5.61, -2.23] -- distinguishable  _[paired cluster bootstrap on ratio of sums (B=10000, seed=20260101)]_
-- CHAIR_S: fox vs sampling: gap -11.60 pts, 95% CI [-16.60, -6.80] -- distinguishable  _[paired percentile bootstrap (B=10000, seed=20260101)]_
-- CHAIR_I: fox vs sampling: gap -5.19 pts, 95% CI [-6.85, -3.53] -- distinguishable  _[paired cluster bootstrap on ratio of sums (B=10000, seed=20260101)]_
 - CHAIR_S: vcd vs sampling: gap -15.20 pts, 95% CI [-20.40, -10.00] -- distinguishable  _[paired percentile bootstrap (B=10000, seed=20260101)]_
 - CHAIR_I: vcd vs sampling: gap -3.30 pts, 95% CI [-5.26, -1.38] -- distinguishable  _[paired cluster bootstrap on ratio of sums (B=10000, seed=20260101)]_
+- ⚠ `vcd`: recall 66.35 against the baseline's 76.09, and 1035 objects named correctly against 1187. Its CHAIR scores are **not** evidence of better grounding: a caption that names fewer objects hallucinates fewer.
 
 
 ### Table 9a -- POPE under greedy decoding (control)
@@ -96,17 +91,10 @@ Paper-reported accuracy (LLaVA-1.5), for reference:
 
 ### Table 9b -- CHAIR under greedy decoding (control)
 
-| method | CHAIR_S (lower better) | CHAIR_S n (captions) | CHAIR_I (lower better) | CHAIR_I n (mentions) | recall | F1 | mean words |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `fox` | 46.20 [41.88, 50.58] † | 500 | 13.45 [11.81, 15.21] † | 3896 | 77.82 | 76.62 | 97.3 |
-| `fox as_described` | 50.60 [46.23, 54.96] † | 500 | 14.37 [12.78, 16.04] † | 3703 | 78.85 | 76.26 | 100.5 |
-| `fox boost_visual g=4` | 42.80 [38.53, 47.18] | 500 | 11.52 [10.08, 13.06] | 3602 | 75.90 | 77.56 | 92.5 |
-| `fox g=100` | 49.40 [45.04, 53.77] † | 500 | 13.66 [12.16, 15.21] † | 3749 | 78.97 | 76.55 | 100.2 |
-| `fox g=10000` | 46.20 [41.88, 50.58] † | 500 | 13.45 [11.81, 15.21] † | 3896 | 77.82 | 76.62 | 97.3 |
-| `fox ld=bf16` | 25.60 [21.97, 29.60] | 500 | 10.62 [6.91, 15.20] † | 5236 | 59.81 | 69.76 | 156.5 |
-| `fox ld=fp32` | 49.00 [44.64, 53.37] † | 500 | 13.80 [12.27, 15.39] † | 3761 | 79.17 | 76.59 | 100.4 |
-| `fox noise_control` | 44.60 [40.30, 48.98] † | 500 | 11.88 [10.48, 13.31] | 3503 | 78.46 | 78.49 | 94.1 |
-| `sampling` | 49.20 [44.84, 53.57] | 500 | 13.82 [12.28, 15.39] | 3762 | 79.23 | 76.60 | 100.5 |
+| method | CHAIR_S (lower better) | CHAIR_S n (captions) | CHAIR_I (lower better) | CHAIR_I n (mentions) | recall | F1 | mean words | correct objects |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `fox` | 46.20 [41.88, 50.58] † | 500 | 13.45 [11.81, 15.21] † | 3896 | 77.82 | 76.62 | 97.3 | 1214 |
+| `sampling` | 49.20 [44.84, 53.57] | 500 | 13.82 [12.28, 15.39] | 3762 | 79.23 | 76.60 | 100.5 | 1236 |
 
 Paper-reported CHAIR (LLaVA-1.5), for reference:
 
@@ -124,20 +112,6 @@ _The paper states neither CHAIR_I's denominator (total mentioned object instance
 
 - CHAIR_S: fox vs sampling: gap -3.00 pts, 95% CI [-7.40, +1.40] -- NOT distinguishable at 95%  _[paired percentile bootstrap (B=10000, seed=20260101)]_
 - CHAIR_I: fox vs sampling: gap -0.37 pts, 95% CI [-1.74, +0.99] -- NOT distinguishable at 95%  _[paired cluster bootstrap on ratio of sums (B=10000, seed=20260101)]_
-- CHAIR_S: fox vs sampling: gap +1.40 pts, 95% CI [-1.40, +4.20] -- NOT distinguishable at 95%  _[paired percentile bootstrap (B=10000, seed=20260101)]_
-- CHAIR_I: fox vs sampling: gap +0.54 pts, 95% CI [-0.32, +1.43] -- NOT distinguishable at 95%  _[paired cluster bootstrap on ratio of sums (B=10000, seed=20260101)]_
-- CHAIR_S: fox vs sampling: gap -6.40 pts, 95% CI [-10.80, -2.00] -- distinguishable  _[paired percentile bootstrap (B=10000, seed=20260101)]_
-- CHAIR_I: fox vs sampling: gap -2.30 pts, 95% CI [-3.65, -0.94] -- distinguishable  _[paired cluster bootstrap on ratio of sums (B=10000, seed=20260101)]_
-- CHAIR_S: fox vs sampling: gap +0.20 pts, 95% CI [-0.60, +1.00] -- NOT distinguishable at 95%  _[paired percentile bootstrap (B=10000, seed=20260101)]_
-- CHAIR_I: fox vs sampling: gap -0.17 pts, 95% CI [-0.45, +0.10] -- NOT distinguishable at 95%  _[paired cluster bootstrap on ratio of sums (B=10000, seed=20260101)]_
-- CHAIR_S: fox vs sampling: gap -3.00 pts, 95% CI [-7.40, +1.40] -- NOT distinguishable at 95%  _[paired percentile bootstrap (B=10000, seed=20260101)]_
-- CHAIR_I: fox vs sampling: gap -0.37 pts, 95% CI [-1.74, +0.99] -- NOT distinguishable at 95%  _[paired cluster bootstrap on ratio of sums (B=10000, seed=20260101)]_
-- CHAIR_S: fox vs sampling: gap -23.60 pts, 95% CI [-29.00, -18.20] -- distinguishable  _[paired percentile bootstrap (B=10000, seed=20260101)]_
-- CHAIR_I: fox vs sampling: gap -3.20 pts, 95% CI [-6.86, +1.07] -- NOT distinguishable at 95%  _[paired cluster bootstrap on ratio of sums (B=10000, seed=20260101)]_
-- CHAIR_S: fox vs sampling: gap -0.20 pts, 95% CI [-1.00, +0.40] -- NOT distinguishable at 95%  _[paired percentile bootstrap (B=10000, seed=20260101)]_
-- CHAIR_I: fox vs sampling: gap -0.02 pts, 95% CI [-0.30, +0.29] -- NOT distinguishable at 95%  _[paired cluster bootstrap on ratio of sums (B=10000, seed=20260101)]_
-- CHAIR_S: fox vs sampling: gap -4.60 pts, 95% CI [-9.00, +0.00] -- NOT distinguishable at 95%  _[paired percentile bootstrap (B=10000, seed=20260101)]_
-- CHAIR_I: fox vs sampling: gap -1.95 pts, 95% CI [-3.23, -0.66] -- distinguishable  _[paired cluster bootstrap on ratio of sums (B=10000, seed=20260101)]_
 
 
 ### Across seeds
@@ -146,74 +120,114 @@ _The paper states neither CHAIR_I's denominator (total mentioned object instance
 
 `best gap` is the best seed of each method differenced. It is reported because the paper's aggregation is ambiguous -- C.2 says "the best results averaged over 10 independent runs" without saying what "best" ranges over. If it ranges over runs, `best gap` is the comparable figure and `mean gap` is not.
 
-| artefact | method | metric | seeds | sampling mean+-sd | method mean+-sd | mean gap [95% CI] | p | best gap | paper gap | verdict |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| chair/val2014_500 (greedy) | `fox` | CHAIR_S | 1 | 49.20+-0.00 | 46.20+-0.00 | n/a -- deterministic | - | -3.00 | -8.30 | see table above |
-| chair/val2014_500 (greedy) | `fox` | CHAIR_I | 1 | 13.82+-0.00 | 13.45+-0.00 | n/a -- deterministic | - | -0.37 | -3.24 | see table above |
-| chair/val2014_500 (greedy) | `fox as_described` | CHAIR_S | 1 | 49.20+-0.00 | 50.60+-0.00 | n/a -- deterministic | - | +1.40 | - | see table above |
-| chair/val2014_500 (greedy) | `fox as_described` | CHAIR_I | 1 | 13.82+-0.00 | 14.37+-0.00 | n/a -- deterministic | - | +0.54 | - | see table above |
-| chair/val2014_500 (greedy) | `fox boost_visual g=4` | CHAIR_S | 1 | 49.20+-0.00 | 42.80+-0.00 | n/a -- deterministic | - | -6.40 | - | see table above |
-| chair/val2014_500 (greedy) | `fox boost_visual g=4` | CHAIR_I | 1 | 13.82+-0.00 | 11.52+-0.00 | n/a -- deterministic | - | -2.30 | - | see table above |
-| chair/val2014_500 (greedy) | `fox g=100` | CHAIR_S | 1 | 49.20+-0.00 | 49.40+-0.00 | n/a -- deterministic | - | +0.20 | - | see table above |
-| chair/val2014_500 (greedy) | `fox g=100` | CHAIR_I | 1 | 13.82+-0.00 | 13.66+-0.00 | n/a -- deterministic | - | -0.17 | - | see table above |
-| chair/val2014_500 (greedy) | `fox g=10000` | CHAIR_S | 1 | 49.20+-0.00 | 46.20+-0.00 | n/a -- deterministic | - | -3.00 | - | see table above |
-| chair/val2014_500 (greedy) | `fox g=10000` | CHAIR_I | 1 | 13.82+-0.00 | 13.45+-0.00 | n/a -- deterministic | - | -0.37 | - | see table above |
-| chair/val2014_500 (greedy) | `fox ld=bf16` | CHAIR_S | 1 | 49.20+-0.00 | 25.60+-0.00 | n/a -- deterministic | - | -23.60 | - | see table above |
-| chair/val2014_500 (greedy) | `fox ld=bf16` | CHAIR_I | 1 | 13.82+-0.00 | 10.62+-0.00 | n/a -- deterministic | - | -3.20 | - | see table above |
-| chair/val2014_500 (greedy) | `fox ld=fp32` | CHAIR_S | 1 | 49.20+-0.00 | 49.00+-0.00 | n/a -- deterministic | - | -0.20 | - | see table above |
-| chair/val2014_500 (greedy) | `fox ld=fp32` | CHAIR_I | 1 | 13.82+-0.00 | 13.80+-0.00 | n/a -- deterministic | - | -0.02 | - | see table above |
-| chair/val2014_500 (greedy) | `fox noise_control` | CHAIR_S | 1 | 49.20+-0.00 | 44.60+-0.00 | n/a -- deterministic | - | -4.60 | - | see table above |
-| chair/val2014_500 (greedy) | `fox noise_control` | CHAIR_I | 1 | 13.82+-0.00 | 11.88+-0.00 | n/a -- deterministic | - | -1.95 | - | see table above |
-| chair/val2014_500 (sampling) | `fox` | CHAIR_S | 10 | 53.72+-2.39 | 46.74+-2.12 | -6.98 [-9.25, -4.71] | 6.6e-05 | -5.80 | -11.20 | **excludes paper** |
-| chair/val2014_500 (sampling) | `fox` | CHAIR_I | 10 | 16.39+-0.86 | 13.72+-0.54 | -2.67 [-3.37, -1.96] | 1.3e-05 | -2.02 | -4.28 | **excludes paper** |
-| chair/val2014_500 (sampling) | `fox off` | CHAIR_S | 3 | 54.40+-2.40 | 49.20+-0.20 | -5.20 [-11.43, +1.03] | 0.069 | -3.00 | - | not resolved |
-| chair/val2014_500 (sampling) | `fox off` | CHAIR_I | 3 | 16.90+-1.09 | 14.05+-0.25 | -2.85 [-5.15, -0.56] | 0.033 | -2.36 | - | resolved |
-| chair/val2014_500 (sampling) | `fox ulp_control` | CHAIR_S | 3 | 54.40+-2.40 | 45.53+-1.14 | -8.87 [-17.07, -0.67] | 0.043 | -7.40 | - | resolved |
-| chair/val2014_500 (sampling) | `fox ulp_control` | CHAIR_I | 3 | 16.90+-1.09 | 13.34+-0.62 | -3.56 [-7.45, +0.33] | 0.059 | -3.16 | - | not resolved |
-| chair/val2014_500 (sampling) | `vcd` | CHAIR_S | 3 | 54.40+-2.40 | 40.53+-1.36 | -13.87 [-20.04, -7.69] | 0.011 | -13.00 | -3.60 | **excludes paper** |
-| chair/val2014_500 (sampling) | `vcd` | CHAIR_I | 3 | 16.90+-1.09 | 14.56+-0.28 | -2.34 [-4.54, -0.14] | 0.045 | -1.83 | -1.16 | reproduces |
-| pope/adversarial (greedy) | `fox` | accuracy | 1 | 79.03+-0.00 | 82.37+-0.00 | n/a -- deterministic | - | +3.33 | +3.33 | see table above |
-| pope/adversarial (greedy) | `fox` | F1 | 1 | 80.89+-0.00 | 82.65+-0.00 | n/a -- deterministic | - | +1.76 | +1.69 | see table above |
-| pope/adversarial (greedy) | `fox alpha=1` | accuracy | 1 | 79.03+-0.00 | 81.83+-0.00 | n/a -- deterministic | - | +2.80 | - | see table above |
-| pope/adversarial (greedy) | `fox alpha=1` | F1 | 1 | 80.89+-0.00 | 82.44+-0.00 | n/a -- deterministic | - | +1.55 | - | see table above |
-| pope/adversarial (greedy) | `fox alpha=4` | accuracy | 1 | 79.03+-0.00 | 82.37+-0.00 | n/a -- deterministic | - | +3.33 | - | see table above |
-| pope/adversarial (greedy) | `fox alpha=4` | F1 | 1 | 80.89+-0.00 | 82.44+-0.00 | n/a -- deterministic | - | +1.56 | - | see table above |
-| pope/adversarial (greedy) | `fox as_described` | accuracy | 1 | 79.03+-0.00 | 79.43+-0.00 | n/a -- deterministic | - | +0.40 | - | see table above |
-| pope/adversarial (greedy) | `fox as_described` | F1 | 1 | 80.89+-0.00 | 81.13+-0.00 | n/a -- deterministic | - | +0.24 | - | see table above |
-| pope/adversarial (greedy) | `fox boost_visual g=4` | accuracy | 1 | 79.03+-0.00 | 80.70+-0.00 | n/a -- deterministic | - | +1.67 | - | see table above |
-| pope/adversarial (greedy) | `fox boost_visual g=4` | F1 | 1 | 80.89+-0.00 | 81.80+-0.00 | n/a -- deterministic | - | +0.91 | - | see table above |
-| pope/adversarial (greedy) | `fox k=0.25` | accuracy | 1 | 79.03+-0.00 | 81.60+-0.00 | n/a -- deterministic | - | +2.57 | - | see table above |
-| pope/adversarial (greedy) | `fox k=0.25` | F1 | 1 | 80.89+-0.00 | 82.17+-0.00 | n/a -- deterministic | - | +1.28 | - | see table above |
-| pope/adversarial (greedy) | `fox k=0.45` | accuracy | 1 | 79.03+-0.00 | 81.80+-0.00 | n/a -- deterministic | - | +2.77 | - | see table above |
-| pope/adversarial (greedy) | `fox k=0.45` | F1 | 1 | 80.89+-0.00 | 82.05+-0.00 | n/a -- deterministic | - | +1.16 | - | see table above |
-| pope/adversarial (greedy) | `fox ld=bf16` | accuracy | 1 | 79.03+-0.00 | 81.97+-0.00 | n/a -- deterministic | - | +2.93 | - | see table above |
-| pope/adversarial (greedy) | `fox ld=bf16` | F1 | 1 | 80.89+-0.00 | 81.91+-0.00 | n/a -- deterministic | - | +1.03 | - | see table above |
-| pope/adversarial (greedy) | `fox ld=fp32` | accuracy | 1 | 79.03+-0.00 | 79.07+-0.00 | n/a -- deterministic | - | +0.03 | - | see table above |
-| pope/adversarial (greedy) | `fox ld=fp32` | F1 | 1 | 80.89+-0.00 | 80.92+-0.00 | n/a -- deterministic | - | +0.04 | - | see table above |
-| pope/adversarial (greedy) | `fox noise_control` | accuracy | 1 | 79.03+-0.00 | 80.07+-0.00 | n/a -- deterministic | - | +1.03 | - | see table above |
-| pope/adversarial (greedy) | `fox noise_control` | F1 | 1 | 80.89+-0.00 | 81.53+-0.00 | n/a -- deterministic | - | +0.64 | - | see table above |
-| pope/adversarial (greedy) | `fox tau=0.1` | accuracy | 1 | 79.03+-0.00 | 82.20+-0.00 | n/a -- deterministic | - | +3.17 | - | see table above |
-| pope/adversarial (greedy) | `fox tau=0.1` | F1 | 1 | 80.89+-0.00 | 82.65+-0.00 | n/a -- deterministic | - | +1.76 | - | see table above |
-| pope/adversarial (greedy) | `fox tau=0.2` | accuracy | 1 | 79.03+-0.00 | 82.80+-0.00 | n/a -- deterministic | - | +3.77 | - | see table above |
-| pope/adversarial (greedy) | `fox tau=0.2` | F1 | 1 | 80.89+-0.00 | 83.14+-0.00 | n/a -- deterministic | - | +2.25 | - | see table above |
-| pope/adversarial (sampling) | `fox` | accuracy | 10 | 76.72+-0.31 | 81.76+-0.33 | +5.03 [+4.68, +5.38] | 1.2e-10 | +4.90 | +5.16 | reproduces |
-| pope/adversarial (sampling) | `fox` | F1 | 10 | 78.93+-0.28 | 82.13+-0.32 | +3.21 [+2.88, +3.53] | 3.7e-09 | +3.18 | - | resolved |
-| pope/adversarial (sampling) | `fox off` | accuracy | 10 | 76.72+-0.31 | 78.93+-0.30 | +2.21 [+1.84, +2.58] | 2.8e-07 | +2.23 | - | resolved |
-| pope/adversarial (sampling) | `fox off` | F1 | 10 | 78.93+-0.28 | 80.75+-0.25 | +1.82 [+1.51, +2.14] | 3.6e-07 | +1.83 | - | resolved |
-| pope/adversarial (sampling) | `fox ulp_control` | accuracy | 10 | 76.72+-0.31 | 81.83+-0.28 | +5.11 [+4.91, +5.30] | 5.2e-13 | +4.97 | - | resolved |
-| pope/adversarial (sampling) | `fox ulp_control` | F1 | 10 | 78.93+-0.28 | 82.19+-0.28 | +3.26 [+3.04, +3.49] | 1.2e-10 | +3.15 | - | resolved |
-| pope/adversarial (sampling) | `vcd` | accuracy | 3 | 76.72+-0.42 | 78.81+-0.07 | +2.09 [+1.01, +3.17] | 0.014 | +1.70 | -1.44 | **excludes paper** |
-| pope/adversarial (sampling) | `vcd` | F1 | 3 | 79.04+-0.34 | 79.07+-0.04 | +0.03 [-0.91, +0.98] | 0.89 | -0.32 | - | not resolved |
-| pope/popular (greedy) | `fox` | accuracy | 1 | 85.90+-0.00 | 86.90+-0.00 | n/a -- deterministic | - | +1.00 | +1.14 | see table above |
-| pope/popular (greedy) | `fox` | F1 | 1 | 86.29+-0.00 | 86.51+-0.00 | n/a -- deterministic | - | +0.22 | +0.27 | see table above |
-| pope/popular (sampling) | `fox` | accuracy | 3 | 82.57+-0.48 | 86.70+-0.35 | +4.13 [+2.63, +5.64] | 0.0071 | +3.87 | +4.17 | reproduces |
-| pope/popular (sampling) | `fox` | F1 | 3 | 83.37+-0.41 | 86.31+-0.35 | +2.94 [+1.46, +4.41] | 0.013 | +2.79 | - | resolved |
-| pope/random (greedy) | `fox` | accuracy | 1 | 89.33+-0.00 | 89.53+-0.00 | n/a -- deterministic | - | +0.20 | +0.10 | see table above |
-| pope/random (greedy) | `fox` | F1 | 1 | 89.28+-0.00 | 88.96+-0.00 | n/a -- deterministic | - | -0.32 | -0.47 | see table above |
-| pope/random (sampling) | `fox` | accuracy | 3 | 85.12+-0.07 | 89.28+-0.15 | +4.16 [+3.86, +4.45] | 0.00026 | +4.17 | +4.20 | reproduces |
-| pope/random (sampling) | `fox` | F1 | 3 | 85.48+-0.10 | 88.72+-0.17 | +3.24 [+2.97, +3.52] | 0.00039 | +3.24 | - | resolved |
+| artefact | method | metric | seeds | sampling mean+-sd | method mean+-sd | mean gap [95% CI] | p | p (Holm) | best gap | paper gap | verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| chair/val2014_500 (greedy) | `fox` | CHAIR_S | 1 | 49.20+-0.00 | 46.20+-0.00 | n/a -- deterministic | - | - | -3.00 | -8.30 | see table above |
+| chair/val2014_500 (greedy) | `fox` | CHAIR_I | 1 | 13.82+-0.00 | 13.45+-0.00 | n/a -- deterministic | - | - | -0.37 | -3.24 | see table above |
+| chair/val2014_500 (greedy) | `fox as_described` | CHAIR_S | 1 | 49.20+-0.00 | 50.60+-0.00 | n/a -- deterministic | - | - | +1.40 | - | see table above |
+| chair/val2014_500 (greedy) | `fox as_described` | CHAIR_I | 1 | 13.82+-0.00 | 14.37+-0.00 | n/a -- deterministic | - | - | +0.54 | - | see table above |
+| chair/val2014_500 (greedy) | `fox boost_visual g=4` | CHAIR_S | 1 | 49.20+-0.00 | 42.80+-0.00 | n/a -- deterministic | - | - | -6.40 | - | see table above |
+| chair/val2014_500 (greedy) | `fox boost_visual g=4` | CHAIR_I | 1 | 13.82+-0.00 | 11.52+-0.00 | n/a -- deterministic | - | - | -2.30 | - | see table above |
+| chair/val2014_500 (greedy) | `fox g=100` | CHAIR_S | 1 | 49.20+-0.00 | 49.40+-0.00 | n/a -- deterministic | - | - | +0.20 | - | see table above |
+| chair/val2014_500 (greedy) | `fox g=100` | CHAIR_I | 1 | 13.82+-0.00 | 13.66+-0.00 | n/a -- deterministic | - | - | -0.17 | - | see table above |
+| chair/val2014_500 (greedy) | `fox g=10000` | CHAIR_S | 1 | 49.20+-0.00 | 46.20+-0.00 | n/a -- deterministic | - | - | -3.00 | - | see table above |
+| chair/val2014_500 (greedy) | `fox g=10000` | CHAIR_I | 1 | 13.82+-0.00 | 13.45+-0.00 | n/a -- deterministic | - | - | -0.37 | - | see table above |
+| chair/val2014_500 (greedy) | `fox ld=bf16` | CHAIR_S | 1 | 49.20+-0.00 | 25.60+-0.00 | n/a -- deterministic | - | - | -23.60 | - | see table above |
+| chair/val2014_500 (greedy) | `fox ld=bf16` | CHAIR_I | 1 | 13.82+-0.00 | 10.62+-0.00 | n/a -- deterministic | - | - | -3.20 | - | see table above |
+| chair/val2014_500 (greedy) | `fox ld=fp32` | CHAIR_S | 1 | 49.20+-0.00 | 49.00+-0.00 | n/a -- deterministic | - | - | -0.20 | - | see table above |
+| chair/val2014_500 (greedy) | `fox ld=fp32` | CHAIR_I | 1 | 13.82+-0.00 | 13.80+-0.00 | n/a -- deterministic | - | - | -0.02 | - | see table above |
+| chair/val2014_500 (greedy) | `fox noise_control` | CHAIR_S | 1 | 49.20+-0.00 | 44.60+-0.00 | n/a -- deterministic | - | - | -4.60 | - | see table above |
+| chair/val2014_500 (greedy) | `fox noise_control` | CHAIR_I | 1 | 13.82+-0.00 | 11.88+-0.00 | n/a -- deterministic | - | - | -1.95 | - | see table above |
+| chair/val2014_500 (sampling) | `fox` | CHAIR_S | 10 | 53.72+-2.39 | 46.74+-2.12 | -6.98 [-9.25, -4.71] | 6.6e-05 | 0.00086 | -5.80 | -11.20 | **excludes paper** |
+| chair/val2014_500 (sampling) | `fox` | CHAIR_I | 10 | 16.39+-0.86 | 13.72+-0.54 | -2.67 [-3.37, -1.96] | 1.3e-05 | 0.00018 | -2.02 | -4.28 | **excludes paper** |
+| chair/val2014_500 (sampling) | `fox off` | CHAIR_S | 3 | 54.40+-2.40 | 49.20+-0.20 | -5.20 [-11.43, +1.03] | 0.069 | 0.22 **ns** | -3.00 | - | not resolved after Holm |
+| chair/val2014_500 (sampling) | `fox off` | CHAIR_I | 3 | 16.90+-1.09 | 14.05+-0.25 | -2.85 [-5.15, -0.56] | 0.033 | 0.2 **ns** | -2.36 | - | not resolved after Holm |
+| chair/val2014_500 (sampling) | `fox ulp_control` | CHAIR_S | 3 | 54.40+-2.40 | 45.53+-1.14 | -8.87 [-17.07, -0.67] | 0.043 | 0.22 **ns** | -7.40 | - | not resolved after Holm |
+| chair/val2014_500 (sampling) | `fox ulp_control` | CHAIR_I | 3 | 16.90+-1.09 | 13.34+-0.62 | -3.56 [-7.45, +0.33] | 0.059 | 0.22 **ns** | -3.16 | - | not resolved after Holm |
+| chair/val2014_500 (sampling) | `vcd` | CHAIR_S | 3 | 54.40+-2.40 | 40.53+-1.36 | -13.87 [-20.04, -7.69] | 0.011 | 0.095 **ns** | -13.00 | -3.60 | not resolved after Holm |
+| chair/val2014_500 (sampling) | `vcd` | CHAIR_I | 3 | 16.90+-1.09 | 14.56+-0.28 | -2.34 [-4.54, -0.14] | 0.045 | 0.22 **ns** | -1.83 | -1.16 | not resolved after Holm |
+| pope/adversarial (greedy) | `fox` | accuracy | 1 | 79.03+-0.00 | 82.37+-0.00 | n/a -- deterministic | - | - | +3.33 | +3.33 | see table above |
+| pope/adversarial (greedy) | `fox` | F1 | 1 | 80.89+-0.00 | 82.65+-0.00 | n/a -- deterministic | - | - | +1.76 | +1.69 | see table above |
+| pope/adversarial (greedy) | `fox alpha=1` | accuracy | 1 | 79.03+-0.00 | 81.83+-0.00 | n/a -- deterministic | - | - | +2.80 | - | see table above |
+| pope/adversarial (greedy) | `fox alpha=1` | F1 | 1 | 80.89+-0.00 | 82.44+-0.00 | n/a -- deterministic | - | - | +1.55 | - | see table above |
+| pope/adversarial (greedy) | `fox alpha=4` | accuracy | 1 | 79.03+-0.00 | 82.37+-0.00 | n/a -- deterministic | - | - | +3.33 | - | see table above |
+| pope/adversarial (greedy) | `fox alpha=4` | F1 | 1 | 80.89+-0.00 | 82.44+-0.00 | n/a -- deterministic | - | - | +1.56 | - | see table above |
+| pope/adversarial (greedy) | `fox as_described` | accuracy | 1 | 79.03+-0.00 | 79.43+-0.00 | n/a -- deterministic | - | - | +0.40 | - | see table above |
+| pope/adversarial (greedy) | `fox as_described` | F1 | 1 | 80.89+-0.00 | 81.13+-0.00 | n/a -- deterministic | - | - | +0.24 | - | see table above |
+| pope/adversarial (greedy) | `fox boost_visual g=4` | accuracy | 1 | 79.03+-0.00 | 80.70+-0.00 | n/a -- deterministic | - | - | +1.67 | - | see table above |
+| pope/adversarial (greedy) | `fox boost_visual g=4` | F1 | 1 | 80.89+-0.00 | 81.80+-0.00 | n/a -- deterministic | - | - | +0.91 | - | see table above |
+| pope/adversarial (greedy) | `fox k=0.25` | accuracy | 1 | 79.03+-0.00 | 81.60+-0.00 | n/a -- deterministic | - | - | +2.57 | - | see table above |
+| pope/adversarial (greedy) | `fox k=0.25` | F1 | 1 | 80.89+-0.00 | 82.17+-0.00 | n/a -- deterministic | - | - | +1.28 | - | see table above |
+| pope/adversarial (greedy) | `fox k=0.45` | accuracy | 1 | 79.03+-0.00 | 81.80+-0.00 | n/a -- deterministic | - | - | +2.77 | - | see table above |
+| pope/adversarial (greedy) | `fox k=0.45` | F1 | 1 | 80.89+-0.00 | 82.05+-0.00 | n/a -- deterministic | - | - | +1.16 | - | see table above |
+| pope/adversarial (greedy) | `fox ld=bf16` | accuracy | 1 | 79.03+-0.00 | 81.97+-0.00 | n/a -- deterministic | - | - | +2.93 | - | see table above |
+| pope/adversarial (greedy) | `fox ld=bf16` | F1 | 1 | 80.89+-0.00 | 81.91+-0.00 | n/a -- deterministic | - | - | +1.03 | - | see table above |
+| pope/adversarial (greedy) | `fox ld=fp32` | accuracy | 1 | 79.03+-0.00 | 79.07+-0.00 | n/a -- deterministic | - | - | +0.03 | - | see table above |
+| pope/adversarial (greedy) | `fox ld=fp32` | F1 | 1 | 80.89+-0.00 | 80.92+-0.00 | n/a -- deterministic | - | - | +0.04 | - | see table above |
+| pope/adversarial (greedy) | `fox noise_control` | accuracy | 1 | 79.03+-0.00 | 80.07+-0.00 | n/a -- deterministic | - | - | +1.03 | - | see table above |
+| pope/adversarial (greedy) | `fox noise_control` | F1 | 1 | 80.89+-0.00 | 81.53+-0.00 | n/a -- deterministic | - | - | +0.64 | - | see table above |
+| pope/adversarial (greedy) | `fox tau=0.1` | accuracy | 1 | 79.03+-0.00 | 82.20+-0.00 | n/a -- deterministic | - | - | +3.17 | - | see table above |
+| pope/adversarial (greedy) | `fox tau=0.1` | F1 | 1 | 80.89+-0.00 | 82.65+-0.00 | n/a -- deterministic | - | - | +1.76 | - | see table above |
+| pope/adversarial (greedy) | `fox tau=0.2` | accuracy | 1 | 79.03+-0.00 | 82.80+-0.00 | n/a -- deterministic | - | - | +3.77 | - | see table above |
+| pope/adversarial (greedy) | `fox tau=0.2` | F1 | 1 | 80.89+-0.00 | 83.14+-0.00 | n/a -- deterministic | - | - | +2.25 | - | see table above |
+| pope/adversarial (sampling) | `fox` | accuracy | 10 | 76.72+-0.31 | 81.76+-0.33 | +5.03 [+4.68, +5.38] | 1.2e-10 | 2.2e-09 | +4.90 | +5.16 | reproduces |
+| pope/adversarial (sampling) | `fox` | F1 | 10 | 78.93+-0.28 | 82.13+-0.32 | +3.21 [+2.88, +3.53] | 3.7e-09 | 6.3e-08 | +3.18 | - | resolved |
+| pope/adversarial (sampling) | `fox off` | accuracy | 10 | 76.72+-0.31 | 78.93+-0.30 | +2.21 [+1.84, +2.58] | 2.8e-07 | 4.5e-06 | +2.23 | - | resolved |
+| pope/adversarial (sampling) | `fox off` | F1 | 10 | 78.93+-0.28 | 80.75+-0.25 | +1.82 [+1.51, +2.14] | 3.6e-07 | 5.4e-06 | +1.83 | - | resolved |
+| pope/adversarial (sampling) | `fox ulp_control` | accuracy | 10 | 76.72+-0.31 | 81.83+-0.28 | +5.11 [+4.91, +5.30] | 5.2e-13 | 1e-11 | +4.97 | - | resolved |
+| pope/adversarial (sampling) | `fox ulp_control` | F1 | 10 | 78.93+-0.28 | 82.19+-0.28 | +3.26 [+3.04, +3.49] | 1.2e-10 | 2.2e-09 | +3.15 | - | resolved |
+| pope/adversarial (sampling) | `vcd` | accuracy | 3 | 76.72+-0.42 | 78.81+-0.07 | +2.09 [+1.01, +3.17] | 0.014 | 0.11 **ns** | +1.70 | -1.44 | not resolved after Holm |
+| pope/adversarial (sampling) | `vcd` | F1 | 3 | 79.04+-0.34 | 79.07+-0.04 | +0.03 [-0.91, +0.98] | 0.89 | 0.89 **ns** | -0.32 | - | not resolved after Holm |
+| pope/popular (greedy) | `fox` | accuracy | 1 | 85.90+-0.00 | 86.90+-0.00 | n/a -- deterministic | - | - | +1.00 | +1.14 | see table above |
+| pope/popular (greedy) | `fox` | F1 | 1 | 86.29+-0.00 | 86.51+-0.00 | n/a -- deterministic | - | - | +0.22 | +0.27 | see table above |
+| pope/popular (sampling) | `fox` | accuracy | 3 | 82.57+-0.48 | 86.70+-0.35 | +4.13 [+2.63, +5.64] | 0.0071 | 0.071 **ns** | +3.87 | +4.17 | not resolved after Holm |
+| pope/popular (sampling) | `fox` | F1 | 3 | 83.37+-0.41 | 86.31+-0.35 | +2.94 [+1.46, +4.41] | 0.013 | 0.11 **ns** | +2.79 | - | not resolved after Holm |
+| pope/random (greedy) | `fox` | accuracy | 1 | 89.33+-0.00 | 89.53+-0.00 | n/a -- deterministic | - | - | +0.20 | +0.10 | see table above |
+| pope/random (greedy) | `fox` | F1 | 1 | 89.28+-0.00 | 88.96+-0.00 | n/a -- deterministic | - | - | -0.32 | -0.47 | see table above |
+| pope/random (sampling) | `fox` | accuracy | 3 | 85.12+-0.07 | 89.28+-0.15 | +4.16 [+3.86, +4.45] | 0.00026 | 0.0032 | +4.17 | +4.20 | reproduces |
+| pope/random (sampling) | `fox` | F1 | 3 | 85.48+-0.10 | 88.72+-0.17 | +3.24 [+2.97, +3.52] | 0.00039 | 0.0043 | +3.24 | - | resolved |
+
+`p (Holm)` is the Holm-Bonferroni adjustment over every row in this table; `**ns**` marks a row that does not survive it. 
 
 Greedy rows are expected to show `sd = 0`: argmax is deterministic, so replicating a seed changes nothing and the paper's Table 9 is single-run too ("we omit averaged scores", C.7). Their intervals come from the per-run tables above, where item variance is the only variance there is.
+
+
+### Equivalence to `fox`
+
+Two one-sided tests (TOST). The null is that the arms differ by at least the margin, so **rejecting it is positive evidence that they do the same thing** -- unlike a large p from an ordinary difference test, which only means the data could not tell them apart and gets easier to obtain the noisier the measurement is.
+
+The margin is a judgement, not a default, and is printed with every row. `smallest margin` is the tightest equivalence the data support at this alpha.
+
+| artefact | arm | metric | seeds | diff vs fox | 90% CI | margin | TOST p | smallest margin | verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| chair/val2014_500 (sampling) | `fox off` | CHAIR_S | 3 | +0.733 | [-1.635, +3.102] | +-2 | 0.1294 | +-3.10 | not shown |
+| chair/val2014_500 (sampling) | `fox off` | CHAIR_I | 3 | +0.158 | [-0.224, +0.541] | +-0.5 | 0.0605 | +-0.54 | not shown |
+| chair/val2014_500 (sampling) | `fox ulp_control` | CHAIR_S | 3 | -2.933 | [-5.178, -0.688] | +-2 | 0.8257 | +-5.18 | not shown |
+| chair/val2014_500 (sampling) | `fox ulp_control` | CHAIR_I | 3 | -0.549 | [-1.731, +0.632] | +-0.5 | 0.5429 | +-1.73 | not shown |
+| chair/val2014_500 (sampling) | `sampling` | CHAIR_S | 10 | +6.980 | [+5.142, +8.818] | +-2 | 0.9996 | +-8.82 | not shown |
+| chair/val2014_500 (sampling) | `sampling` | CHAIR_I | 10 | +2.668 | [+2.097, +3.240] | +-0.5 | 1.0000 | +-3.24 | not shown |
+| chair/val2014_500 (sampling) | `vcd` | CHAIR_S | 3 | -7.933 | [-8.448, -7.418] | +-2 | 0.9996 | +-8.45 | not shown |
+| chair/val2014_500 (sampling) | `vcd` | CHAIR_I | 3 | +0.671 | [+0.441, +0.900] | +-0.5 | 0.9189 | +-0.90 | not shown |
+| pope/adversarial (sampling) | `fox off` | accuracy | 10 | -2.827 | [-3.044, -2.610] | +-0.5 | 1.0000 | +-3.04 | not shown |
+| pope/adversarial (sampling) | `fox off` | F1 | 10 | -1.384 | [-1.588, -1.181] | +-0.5 | 1.0000 | +-1.59 | not shown |
+| pope/adversarial (sampling) | `fox ulp_control` | accuracy | 10 | +0.073 | [-0.232, +0.379] | +-0.5 | 0.0154 | +-0.38 | **equivalent** |
+| pope/adversarial (sampling) | `fox ulp_control` | F1 | 10 | +0.057 | [-0.237, +0.350] | +-0.5 | 0.0109 | +-0.35 | **equivalent** |
+| pope/adversarial (sampling) | `sampling` | accuracy | 10 | -5.033 | [-5.316, -4.751] | +-0.5 | 1.0000 | +-5.32 | not shown |
+| pope/adversarial (sampling) | `sampling` | F1 | 10 | -3.207 | [-3.472, -2.942] | +-0.5 | 1.0000 | +-3.47 | not shown |
+| pope/adversarial (sampling) | `vcd` | accuracy | 3 | -2.744 | [-3.127, -2.362] | +-0.5 | 0.9983 | +-3.13 | not shown |
+| pope/adversarial (sampling) | `vcd` | F1 | 3 | -2.911 | [-3.188, -2.633] | +-0.5 | 0.9992 | +-3.19 | not shown |
+| pope/popular (sampling) | `sampling` | accuracy | 3 | -4.133 | [-5.156, -3.111] | +-0.5 | 0.9954 | +-5.16 | not shown |
+| pope/popular (sampling) | `sampling` | F1 | 3 | -2.938 | [-3.940, -1.937] | +-0.5 | 0.9904 | +-3.94 | not shown |
+| pope/random (sampling) | `sampling` | accuracy | 3 | -4.156 | [-4.353, -3.958] | +-0.5 | 0.9998 | +-4.35 | not shown |
+| pope/random (sampling) | `sampling` | F1 | 3 | -3.244 | [-3.430, -3.057] | +-0.5 | 0.9997 | +-3.43 | not shown |
+
+
+### Degenerate CHAIR arms
+
+CHAIR without recall beside it is gameable, and these arms game it.
+
+- ⚠ **`fox ld=bf16`** on chair/val2014_500 (greedy): CHAIR_S 25.60 against 49.20, which looks like a +23.60 point win -- but recall fell 79.23 -> 59.81, correct objects 1236 -> 933, caption length 100 -> 156 words. It hallucinates less because it names less. Do not read its CHAIR scores as grounding.
+- ⚠ **`vcd`** on chair/val2014_500 (sampling): CHAIR_S 40.53 against 54.40, which looks like a +13.87 point win -- but recall fell 75.64 -> 66.73, correct objects 1180 -> 1041, caption length 102 -> 96 words. It hallucinates less because it names less. Do not read its CHAIR scores as grounding.
 
 
 ### Resolution budget

@@ -981,7 +981,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--runs-dir", type=Path, default=p.runs_root)
     ap.add_argument("--images-dir", type=Path, default=p.coco_images_dir)
     ap.add_argument("--pope-dir", type=Path, default=p.pope_ann_dir)
-    ap.add_argument("--chair-image-list", type=Path, default=p.chair_image_list)
+    ap.add_argument(
+        "--chair-image-list", type=Path, default=None,
+        help="default: the list for --split. Each CHAIR draw has its own "
+             "file, so the split name alone selects which 500 images are "
+             "scored and the run's provenance records it.")
     ap.add_argument("--dry-run", action="store_true",
                     help="use the CPU-only 'echo' method (pipeline smoke test)")
     ap.add_argument("--no-fsync", action="store_true", help="tests only")
@@ -1022,7 +1026,11 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         pin_precision_flags()
     samples = load_benchmark(
         benchmark=cfg.benchmark, split=cfg.split, pope_dir=args.pope_dir,
-        images_dir=args.images_dir, chair_image_list=args.chair_image_list,
+        images_dir=args.images_dir,
+        chair_image_list=(args.chair_image_list
+                          or paths().chair_image_list_for(cfg.split)
+                          if cfg.benchmark == "chair"
+                          else args.chair_image_list),
         prompt_template_id=cfg.prompt_template_id,
         require_images=not args.dry_run,
     )

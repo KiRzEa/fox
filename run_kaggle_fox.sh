@@ -6,7 +6,7 @@
 #   local:   python3 -m foxrepro.bench.plan plan --budget-hours 9
 #            python3 -m foxrepro.bench.plan plan --budget-hours 9 \
 #                    --calibrate <logs>/_job_times.tsv --round r2   (after session 1)
-#   Kaggle:  bash run_kaggle_fox.sh <N>        N = session number (1..12)
+#   Kaggle:  bash run_kaggle_fox.sh <N>        N = session number (1..6)
 #            DRY=1 bash run_kaggle_fox.sh <N>  print the commands only
 #            BUDGET=10 bash run_kaggle_fox.sh <N>     hours, default from the plan
 #

@@ -1022,3 +1022,100 @@ class TestPriorityPartition(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             partition_by_priority(0.0)
+
+
+class TestChairDraws(unittest.TestCase):
+    """CHAIR's image set is a confound the paper cannot resolve.
+
+    char_eval.py:136-137 does ``os.listdir(args.data_path)`` then
+    ``random.shuffle`` and keeps 500, with ``data_path`` defaulting to
+    ``/data-disk/only_test`` -- a directory that was never published. Which
+    500 images produced the paper's CHAIR table depends on that directory's
+    contents and on the author's filesystem ordering, so it is not
+    recoverable. Our CHAIR baseline sits 3.88 points from theirs while our
+    POPE baseline, on POPE's fixed official files, sits 0.05 from it. These
+    draws measure how much of that is the image set alone.
+    """
+
+    def test_every_draw_has_a_shipped_image_list(self) -> None:
+        import json
+
+        from foxrepro.storage import CHAIR_DRAWS, paths
+
+        p = paths()
+        for split in CHAIR_DRAWS:
+            with self.subTest(split=split):
+                f = p.chair_image_list_for(split)
+                self.assertTrue(f.is_file(), f"{f} missing")
+                doc = json.loads(f.read_text())
+                self.assertEqual(len(doc["image_ids"]), 500)
+                self.assertEqual(doc["split"], split)
+
+    def test_the_draws_are_distinct_from_each_other(self) -> None:
+        import json
+
+        from foxrepro.storage import BENCHMARK_SPLITS, paths
+
+        p = paths()
+        sets = {}
+        for split in BENCHMARK_SPLITS["chair"]:
+            doc = json.loads(p.chair_image_list_for(split).read_text())
+            sets[split] = set(doc["image_ids"])
+        names = sorted(sets)
+        for i, a in enumerate(names):
+            for b in names[i + 1:]:
+                with self.subTest(pair=(a, b)):
+                    overlap = len(sets[a] & sets[b])
+                    # Independent 500-draws from ~40k images overlap by ~6 by
+                    # chance; anything near 500 would mean a copied file.
+                    self.assertLess(overlap, 50, f"{a} and {b} share {overlap}")
+
+    def test_the_split_alone_selects_the_image_list(self) -> None:
+        """Provenance records which 500 images a run scored.
+
+        This is the thing the released harness cannot tell you about its own
+        numbers, so it is the thing this repo must not get wrong.
+        """
+        from foxrepro.storage import BENCHMARK_SPLITS, paths
+
+        p = paths()
+        seen = {p.chair_image_list_for(s) for s in BENCHMARK_SPLITS["chair"]}
+        self.assertEqual(len(seen), len(BENCHMARK_SPLITS["chair"]))
+
+    def test_an_unknown_chair_split_is_rejected(self) -> None:
+        from foxrepro.storage import paths
+
+        with self.assertRaises(ValueError):
+            paths().chair_image_list_for("val2014_500_d99")
+
+    def test_each_draw_is_planned_with_a_baseline_and_a_method(self) -> None:
+        from foxrepro.storage import CHAIR_DRAWS
+
+        for split in CHAIR_DRAWS:
+            methods = {j.method for j in PLAN
+                       if j.target == "chair_draws" and j.split == split}
+            with self.subTest(split=split):
+                self.assertEqual(methods, {"sampling", "fox"})
+
+    def test_the_draws_are_greedy_so_one_run_each_suffices(self) -> None:
+        for j in PLAN:
+            if j.target == "chair_draws":
+                with self.subTest(job=j.job_id()):
+                    self.assertEqual(j.decoding, "greedy")
+                    self.assertEqual(j.seed, 42)
+
+    def test_a_split_with_no_sample_count_is_an_error_not_a_free_job(self) -> None:
+        """Defaulting to zero made a new split look free to the packer."""
+        from foxrepro.bench.plan import Job
+
+        with self.assertRaises(KeyError):
+            Job("x", "fox", "chair", "val2014_500_d9").est_seconds()
+
+    def test_the_draws_cost_what_the_original_split_costs(self) -> None:
+        from foxrepro.storage import CHAIR_DRAWS
+
+        base = Job("table2", "fox", "chair", "val2014_500").est_seconds()
+        for split in CHAIR_DRAWS:
+            with self.subTest(split=split):
+                self.assertEqual(
+                    Job("chair_draws", "fox", "chair", split).est_seconds(), base)

@@ -83,7 +83,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-from foxrepro.storage import BENCHMARK_SPLITS, RunKey, paths
+from foxrepro.storage import BENCHMARK_SPLITS, CHAIR_DRAWS, RunKey, paths
 from foxrepro.data.loaders import DEFAULT_TEMPLATE_IDS
 
 __all__ = [
@@ -113,6 +113,7 @@ N_SAMPLES: Dict[Tuple[str, str], int] = {
     ("pope", "popular"): 3000,
     ("pope", "adversarial"): 3000,
     ("chair", "val2014_500"): 500,
+    **{("chair", d): 500 for d in CHAIR_DRAWS},
 }
 
 #: Methods that run two forward branches per token.
@@ -186,7 +187,16 @@ class Job:
 
     @property
     def n_samples(self) -> int:
-        n = N_SAMPLES.get((self.benchmark, self.split), 0)
+        try:
+            n = N_SAMPLES[(self.benchmark, self.split)]
+        except KeyError:
+            # Defaulting to 0 here made a new split look free: the estimate
+            # was zero, the session packer placed it anywhere, and the budget
+            # it was supposed to respect no longer meant anything.
+            raise KeyError(
+                f"no sample count for ({self.benchmark!r}, {self.split!r}); "
+                f"add it to N_SAMPLES. Known: {sorted(N_SAMPLES)}"
+            ) from None
         return min(n, self.limit) if self.limit else n
 
     @property
@@ -423,6 +433,44 @@ def _build_plan() -> List[Job]:
         jobs.append(Job("fig9", "fox", "pope", "adversarial", tau_js=tau,
                         limit=500, decoding="greedy",
                         note=f"tau_js={tau:g}, 500 samples"))
+
+    # ---- Round 4 ---------------------------------------------------------- #
+    # Three gaps the first three rounds left, each tied to a claim that is
+    # currently weaker than the claim it supports.
+
+    # A. How much of the CHAIR discrepancy is just WHICH 500 images?
+    #    char_eval.py takes os.listdir of an unpublished directory, shuffles
+    #    it and keeps 500, so the paper's image set is not recoverable even in
+    #    principle. Our CHAIR baseline sits 3.88 points from theirs while our
+    #    POPE baseline -- on POPE's fixed official files -- sits 0.05 from it.
+    #    Four more independent draws turn "probably the image set" into a
+    #    measured spread. Greedy, so one run per draw is the whole answer.
+    for split in CHAIR_DRAWS:
+        for method in ("sampling", "fox"):
+            jobs.append(Job("chair_draws", method, "chair", split,
+                            decoding="greedy",
+                            note=f"image-set sensitivity, {split}"))
+
+    # D. The dtype arms decide the mechanism, and they exist only as single
+    #    greedy runs. Under sampling with ten seeds they become comparable to
+    #    the fox and ulp_control intervals rather than a separate kind of
+    #    evidence. fp32 is the one that matters: it removes the rounding while
+    #    keeping the shift, and under greedy it took the whole effect with it.
+    for ld in ("fp32", "bf16"):
+        for seed in SEEDS_FULL:
+            jobs.append(Job("dtype_arms", "fox", "pope", "adversarial",
+                            logit_dtype=ld, seed=seed,
+                            note=f"logit_dtype={ld}, sampling, seeded"))
+
+    # F. boost_visual beat fox on CHAIR_I but not on CHAIR_S, on one run each.
+    #    "The intervention the paper argues from works better than the one it
+    #    ships" is the strongest claim in the project and currently rests on
+    #    a single greedy pair.
+    for seed in SEEDS_FULL:
+        for bench, split in (("pope", "adversarial"), ("chair", "val2014_500")):
+            jobs.append(Job("boost_visual", "fox", bench, split,
+                            mode="boost_visual", gamma=4.0, seed=seed,
+                            note="amplify visual attention, delta=4, sampling"))
 
     # ---- Tier 6: the VCD-noise arm --------------------------------------- #
     # Labelled vcd-noise-fox-fusion, not VCD: what this repo can run is VCD's

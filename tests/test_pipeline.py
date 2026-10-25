@@ -677,3 +677,42 @@ class TestPerApproachStatistics(unittest.TestCase):
         cells = [c.strip() for c in off_row.split("|")]
         self.assertIn("-", cells)              # paper gap left empty
         self.assertNotIn("+5.16", off_row)
+
+    def test_a_short_probe_is_not_pooled_into_a_full_arm(self) -> None:
+        """The determinism job is 50 samples; the headline arm is 500.
+
+        Averaging them moved greedy fox's CHAIR_S by four points and gave a
+        deterministic arm a standard deviation of 4.95. They share a method,
+        a mode, a benchmark and a decoding -- only the sample count tells
+        them apart, so the sample count has to be in the key.
+        """
+        from foxrepro.bench.report import group_by_seed, load_results
+
+        self._write("full42.metrics.json", "fox", 0.814, seed=42)
+        self._write("full43.metrics.json", "fox", 0.818, seed=43)
+        probe = json.loads(
+            (self.reports / "full42.metrics.json").read_text())
+        probe["provenance"]["seed"] = 997
+        probe["metrics"]["n_samples"] = 50
+        probe["metrics"]["accuracy"]["n"] = 50
+        (self.reports / "probe997.metrics.json").write_text(json.dumps(probe))
+
+        grouped = group_by_seed(load_results(self.reports))
+        bucket = grouped[("pope", "adversarial", "sampling", "fox")]
+        self.assertEqual(sorted(bucket), [42, 43])
+        self.assertNotIn(997, bucket)
+
+    def test_the_larger_run_wins_whichever_order_they_load(self) -> None:
+        from foxrepro.bench.report import group_by_seed, load_results
+
+        for name, n, seed in (("a_small.metrics.json", 50, 42),
+                              ("z_large.metrics.json", 3000, 43)):
+            self._write(name, "fox", 0.81, seed=seed)
+            doc = json.loads((self.reports / name).read_text())
+            doc["metrics"]["n_samples"] = n
+            doc["metrics"]["accuracy"]["n"] = n
+            (self.reports / name).write_text(json.dumps(doc))
+
+        bucket = group_by_seed(load_results(self.reports))[
+            ("pope", "adversarial", "sampling", "fox")]
+        self.assertEqual(sorted(bucket), [43])        # the 3000-sample run

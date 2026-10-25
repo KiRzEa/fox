@@ -10,6 +10,7 @@ is asserted for every job in the plan, not a sample of them.
 
 from __future__ import annotations
 
+import json
 import shlex
 import tempfile
 import unittest
@@ -573,9 +574,16 @@ class TestSessionBudget(unittest.TestCase):
                                  script).group(1))
         claimed = int(re.search(r"N = session number \(1\.\.(\d+)\)",
                                 script).group(1))
-        actual = len(partition_by_priority(
-            budget, runs_root=REPO_ROOT / "results" / "runs"))
-        self.assertEqual(claimed, actual)
+        # Compared against the FROZEN plan, which is the file run_kaggle_fox.sh
+        # actually reads, not a fresh partition. Recomputing would answer a
+        # different question -- how many sessions the plan takes from scratch,
+        # which is 13 once the finished work is added back in -- and would let
+        # the script's comment drift from the file it dispatches on.
+        frozen = json.loads((REPO_ROOT / "scripts" / "run_plan.json").read_text())
+        self.assertEqual(claimed, len(frozen["sessions"]))
+        for sess in frozen["sessions"]:
+            with self.subTest(session=sess["session"]):
+                self.assertLessEqual(float(sess["est_hours"]), self.WALL_HOURS)
 
     def test_watchdog_fires_inside_the_budget(self) -> None:
         """A fixed 11.3 h deadline never fires in a 10 h session."""
@@ -992,16 +1000,22 @@ class TestPriorityPartition(unittest.TestCase):
                 self.assertEqual(len(idxs), 1, f"{key} split across {idxs}")
 
     def test_finished_jobs_are_dropped(self) -> None:
-        from foxrepro.bench.plan import partition_by_priority
+        """Exactly the jobs scan_progress calls complete, no more and no less.
 
-        full = partition_by_priority(9.0, skip_done=False)
-        n_full = sum(len(g) for g in full)
-        pruned = partition_by_priority(
-            9.0, runs_root=REPO_ROOT / "results" / "runs", skip_done=True)
-        n_pruned = sum(len(g) for g in pruned)
-        # results/runs holds session 1's six finished jobs, under both rounds;
-        # only the r2 six match the current plan's prompt arm.
-        self.assertEqual(n_full - n_pruned, 6)
+        Asserted against the archive rather than against a fixed count: the
+        count is a fact about how much has been run so far, which changes
+        every session, while the invariant does not.
+        """
+        from foxrepro.bench.plan import partition_by_priority, scan_progress
+
+        runs = REPO_ROOT / "results" / "runs"
+        n_full = sum(len(g) for g in partition_by_priority(9.0, skip_done=False))
+        n_pruned = sum(len(g) for g in partition_by_priority(
+            9.0, runs_root=runs, skip_done=True))
+        rows = scan_progress(runs_root=runs)["rows"]
+        n_done = sum(1 for r in rows if r["complete"])
+        self.assertEqual(n_full, len(PLAN))
+        self.assertEqual(n_full - n_pruned, n_done)
 
     def test_a_zero_budget_is_rejected(self) -> None:
         from foxrepro.bench.plan import partition_by_priority

@@ -129,6 +129,21 @@ class RunResult:
         return int(self.prov["seed"])
 
     @property
+    def n_samples(self) -> int:
+        """How many items this run covers.
+
+        Part of the grouping key, because a run over 50 samples is not a
+        replicate of one over 500 -- averaging the two would silently mix a
+        short probe into a headline arm. The determinism jobs (50 samples,
+        seed 997) and the fig9 sweeps (500 POPE questions against the usual
+        3000) are both this shape.
+        """
+        m = self.met
+        if self.benchmark == "chair":
+            return int(m["totals"]["chair_s_denominator"])
+        return int(m["n_samples"])
+
+    @property
     def arm(self) -> str:
         """The approach, not just the method name.
 
@@ -261,9 +276,20 @@ def group_by_seed(
     share a method name, and keying on the name would merge them.
     """
     out: Dict[Tuple[str, str, str, str], Dict[int, RunResult]] = {}
+    sizes: Dict[Tuple[str, str, str, str], int] = {}
     for r in results:
         key = (r.benchmark, r.split, r.decoding, r.arm)
-        bucket = out.setdefault(key, {})
+        # A 50-sample probe is not a replicate of a 500-sample run. Keeping
+        # the largest size per arm drops the short ones rather than averaging
+        # them in, which is what pooled the seed-997 determinism job into the
+        # headline greedy arm and moved its CHAIR_S by 4 points.
+        n = r.n_samples
+        if key not in sizes or n > sizes[key]:
+            sizes[key] = n
+            out[key] = {}
+        elif n < sizes[key]:
+            continue
+        bucket = out[key]
         if r.seed in bucket:
             raise ValueError(
                 f"two metrics files for {key} seed {r.seed}: "
@@ -285,11 +311,22 @@ def reference_seed(results: Sequence[RunResult]) -> Optional[int]:
     return min(seeds) if seeds else None
 
 
+def bare_arms(results: Sequence[RunResult]) -> List[RunResult]:
+    """Only the arms the paper also prints: a method with no modifiers.
+
+    The paper-comparison tables put our cell next to theirs, so they may hold
+    only arms that have a counterpart there. ``fox --mode ulp_control`` and
+    ``fox --logit-dtype bf16`` are this repo's own, and they appear in the
+    across-seed section instead, where each gets its own row and interval.
+    """
+    return [r for r in results if " " not in r.arm]
+
+
 def _index(results: Sequence[RunResult]) -> Dict[Tuple[str, str, str], RunResult]:
-    """``(benchmark, split, method) -> result``; later duplicates win loudly."""
+    """``(benchmark, split, arm) -> result``; later duplicates win loudly."""
     index: Dict[Tuple[str, str, str], RunResult] = {}
     for r in results:
-        key = (r.benchmark, r.split, r.method)
+        key = (r.benchmark, r.split, r.arm)
         if key in index:
             prev = index[key]
             differing = {
@@ -388,7 +425,7 @@ def render_pope_table(
     results: Sequence[RunResult], baseline: str, title: str, paper_key: Optional[str]
 ) -> str:
     """Render the POPE table (paper Table 1 / the POPE half of Table 9)."""
-    index = _index([r for r in results if r.benchmark == "pope"])
+    index = _index(bare_arms([r for r in results if r.benchmark == "pope"]))
     methods = sorted({m for (_, _, m) in index})
     if not methods:
         return f"### {title}\n\n_no POPE runs found._\n"

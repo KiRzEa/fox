@@ -55,6 +55,8 @@ __all__ = [
     "intervene",
     "jsd",
     "fuse",
+    "contrastive_fuse",
+    "add_diffusion_noise",
 ]
 
 #: Canonical dtype spelling -> torch dtype. ``"native"`` is resolved against
@@ -386,6 +388,77 @@ def jsd(
     kl_p = (p * (p / m).log()).sum(dim=-1)
     kl_q = (q * (q / m).log()).sum(dim=-1)
     return 0.5 * (kl_p + kl_q)
+
+
+def contrastive_fuse(
+    obs_logits: torch.Tensor,
+    cd_logits_in: torch.Tensor,
+    *,
+    cd_alpha: float = 1.0,
+    cd_beta: float = 0.1,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """The contrastive rule VCD, ICD and SID share.
+
+    ``diffs = (1 + a) * z_obs - a * z_cd``, then the adaptive plausibility
+    constraint keeps only tokens the ORIGINAL branch found plausible:
+    ``z_obs >= log(beta) + max(z_obs)``.
+
+    This is a **subtraction**, and Fox's :func:`fuse` is an addition. They
+    are not variants of one another: this one amplifies where the two
+    branches disagree, Fox's amplifies where they agree.
+
+    Proven bit-identical to :func:`foxrepro.fox.reference.reference_contrastive_fuse`
+    on random tensors across dtypes, so a number produced here is the number
+    the baselines' own code produces.
+
+    Args:
+        obs_logits: next-token logits from the unperturbed branch.
+        cd_logits_in: next-token logits from the perturbed branch.
+        cd_alpha: contrast strength. 1.0 for VCD, 0.5 for SID -- the formula
+            is shared, the tuning is not, so the caller states it.
+        cd_beta: plausibility threshold, 0.1 in all three.
+
+    Returns:
+        ``(diffs, masked)``. Greedy argmaxes ``diffs`` unmasked; sampling
+        draws from ``masked``. The released code has that asymmetry and so
+        does Fox, which is why both are returned rather than one.
+    """
+    cutoff = math.log(cd_beta) + obs_logits.max(dim=-1, keepdim=True).values
+    diffs = (1 + cd_alpha) * obs_logits - cd_alpha * cd_logits_in
+    masked = diffs.masked_fill(obs_logits < cutoff, -float("inf"))
+    return diffs, masked
+
+
+def add_diffusion_noise(
+    image_tensor: torch.Tensor,
+    noise_step: int = 500,
+    generator: Optional[torch.Generator] = None,
+) -> torch.Tensor:
+    """VCD's image corruption: forward diffusion on a **sigmoid** schedule.
+
+    Not the linear DDPM schedule. ``linspace(-6, 6)`` through a sigmoid,
+    scaled into ``[1e-5, 0.5e-2]``, keeps ``sqrt(alpha_bar) = 0.863`` of the
+    image at step 500; the familiar ``linspace(1e-4, 0.02)`` keeps 0.280 and
+    would be contrasting against near-white noise. An earlier version of this
+    repo used the linear one, which is why the schedule is transcribed in
+    ``reference.py`` and asserted equal rather than written from memory.
+
+    Args:
+        image_tensor: pixel values.
+        noise_step: index into the 1000-step schedule; 500 in both releases.
+        generator: for reproducible noise. The released code uses global
+            RNG; threading a generator here is what lets a seeded run be
+            repeatable without touching global state.
+    """
+    num_steps = 1000
+    betas = torch.linspace(-6, 6, num_steps, device=image_tensor.device)
+    betas = torch.sigmoid(betas) * (0.5e-2 - 1e-5) + 1e-5
+    alphas_prod = torch.cumprod(1.0 - betas, dim=0)
+    a_t = torch.sqrt(alphas_prod[noise_step]).to(image_tensor.dtype)
+    a_1m_t = torch.sqrt(1.0 - alphas_prod[noise_step]).to(image_tensor.dtype)
+
+    noise = torch.empty_like(image_tensor).normal_(generator=generator)
+    return a_t * image_tensor + a_1m_t * noise
 
 
 def fuse(

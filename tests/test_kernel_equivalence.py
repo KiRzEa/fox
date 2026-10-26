@@ -489,3 +489,112 @@ class TestHarnessMatchesTheReleasedHarness(unittest.TestCase):
         from foxrepro.fox.reference import RELEASED_CHAIR_QUESTION
 
         self.assertEqual(PROMPT_TEMPLATES["chair_v1"], RELEASED_CHAIR_QUESTION)
+
+
+class TestContrastiveFuseBitEquality(unittest.TestCase):
+    """VCD, ICD and SID share one decoding rule; it gets the same treatment
+    as Fox's -- transcribed verbatim, then the clean port asserted equal.
+
+    The rule is a SUBTRACTION: ``(1+a)*z_obs - a*z_cd``. Fox's fusion is an
+    addition. Implementing the baselines as "Fox's fusion with a different
+    second branch" is what the released Fox fork did, and it is why its
+    `vcd` arm is labelled vcd-noise-fox-fusion rather than VCD.
+    """
+
+    SHAPES = ((1, 32064), (2, 32064), (4, 128))
+    ALPHAS = (0.5, 1.0, 2.0)
+
+    def test_bit_identical_across_dtypes_and_alphas(self) -> None:
+        from foxrepro.fox.kernel import contrastive_fuse
+        from foxrepro.fox.reference import reference_contrastive_fuse
+
+        for dtype in (torch.float32, torch.float16, torch.bfloat16):
+            for shape in self.SHAPES:
+                for alpha in self.ALPHAS:
+                    with self.subTest(dtype=dtype, shape=shape, alpha=alpha):
+                        g = torch.Generator().manual_seed(hash((shape, alpha)) % 2**31)
+                        z = (torch.randn(*shape, generator=g) * 8).to(dtype)
+                        zc = (torch.randn(*shape, generator=g) * 8).to(dtype)
+                        rd, rm = reference_contrastive_fuse(z, zc, alpha, 0.1)
+                        kd, km = contrastive_fuse(z, zc, cd_alpha=alpha, cd_beta=0.1)
+                        self.assertTrue(torch.equal(rd, kd), "diffs differ")
+                        self.assertTrue(torch.equal(rm, km), "masked differ")
+
+    def test_it_is_a_subtraction_not_fox_s_addition(self) -> None:
+        """The distinction the released fork lost."""
+        from foxrepro.fox.kernel import contrastive_fuse, fuse
+
+        z = torch.tensor([[1.0, 2.0, 3.0]])
+        zc = torch.tensor([[3.0, 2.0, 1.0]])
+        diffs, _ = contrastive_fuse(z, zc, cd_alpha=1.0)
+        # (1+1)*z - 1*zc
+        self.assertTrue(torch.equal(diffs, torch.tensor([[-1.0, 2.0, 5.0]])))
+
+        fused, _, _ = fuse(z, zc, torch.tensor([0.0]), alpha=1.0, tau_js=0.15)
+        self.assertTrue(torch.equal(fused, torch.tensor([[4.0, 4.0, 4.0]])))
+        self.assertFalse(torch.equal(diffs, fused))
+
+    def test_the_cutoff_reads_the_original_branch_only(self) -> None:
+        """SID masks on z_obs, not on min(z_obs, z_cd).
+
+        The Fox fork's dead ICD branch uses min() instead, so the fork had
+        diverged here too. SID is the parent and is what the published
+        baselines ran.
+        """
+        from foxrepro.fox.kernel import contrastive_fuse
+
+        z = torch.tensor([[10.0, 0.0, -50.0]])
+        zc = torch.tensor([[500.0, 500.0, 500.0]])   # huge, would move a min()
+        _, masked = contrastive_fuse(z, zc, cd_alpha=1.0, cd_beta=0.1)
+        # cutoff = log(0.1) + 10 = 7.70; only the first entry survives
+        self.assertFalse(torch.isinf(masked[0, 0]))
+        self.assertTrue(torch.isinf(masked[0, 1]))
+        self.assertTrue(torch.isinf(masked[0, 2]))
+
+
+class TestVcdNoiseScheduleBitEquality(unittest.TestCase):
+    """VCD's schedule is sigmoid, not linear DDPM, and the difference is big.
+
+    At noise_step 500 the released schedule keeps sqrt(alpha_bar) = 0.863 of
+    the image; the linear linspace(1e-4, 0.02) this repo used before keeps
+    0.280 -- nearly white noise. Contrasting against the wrong image is not
+    VCD, and no metric downstream would have said so.
+    """
+
+    def test_the_retained_signal_matches_the_release(self) -> None:
+        from foxrepro.fox.kernel import add_diffusion_noise
+
+        img = torch.ones(1, 3, 4, 4)
+        g = torch.Generator().manual_seed(0)
+        out = add_diffusion_noise(img, 500, generator=g)
+        g2 = torch.Generator().manual_seed(0)
+        noise = torch.empty_like(img).normal_(generator=g2)
+        expected = 0.8630 * img + (1 - 0.8630**2) ** 0.5 * noise
+        self.assertTrue(torch.allclose(out, expected, atol=2e-4))
+
+    def test_it_is_not_the_linear_ddpm_schedule(self) -> None:
+        from foxrepro.fox.kernel import add_diffusion_noise
+
+        img = torch.ones(1, 3, 8, 8)
+        g = torch.Generator().manual_seed(0)
+        ours = add_diffusion_noise(img, 500, generator=g)
+
+        betas = torch.linspace(1e-4, 0.02, 1000)
+        a_bar = torch.cumprod(1 - betas, 0)[499]
+        g2 = torch.Generator().manual_seed(0)
+        noise = torch.empty_like(img).normal_(generator=g2)
+        linear = a_bar.sqrt() * img + (1 - a_bar).sqrt() * noise
+
+        self.assertFalse(torch.allclose(ours, linear, atol=0.05))
+        self.assertGreater(float(a_bar.sqrt()), 0.27)   # the wrong one: 0.280
+        self.assertLess(float(a_bar.sqrt()), 0.29)
+
+    def test_the_generator_makes_it_repeatable(self) -> None:
+        from foxrepro.fox.kernel import add_diffusion_noise
+
+        img = torch.randn(1, 3, 8, 8)
+        a = add_diffusion_noise(img, 500, generator=torch.Generator().manual_seed(7))
+        b = add_diffusion_noise(img, 500, generator=torch.Generator().manual_seed(7))
+        c = add_diffusion_noise(img, 500, generator=torch.Generator().manual_seed(8))
+        self.assertTrue(torch.equal(a, b))
+        self.assertFalse(torch.equal(a, c))

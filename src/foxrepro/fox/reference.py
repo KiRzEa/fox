@@ -37,6 +37,15 @@ Provenance of each transcription
 ``reference_span_visual_text`` / ``reference_metrics``
     ``Uncertain_head.py`` lines 4-128, whole file.
 
+``reference_contrastive_fuse`` / ``reference_add_diffusion_noise``
+    The compared methods, not Fox: ``vcd_sample.py`` lines 176-184 and
+    ``vcd_add_noise.py``, whole file, taken from **huofushuo/SID** rather
+    than from the Fox fork. SID is the unmodified parent -- the Fox repo is
+    built on it, keeps the same two filenames, and replaced the contrastive
+    branch with its own additive fusion while assigning ``use_icd = False``
+    above the ICD branch. Transcribing from the parent gets the formula the
+    compared baselines actually used.
+
 ``reference_prompt`` / ``reference_pope_predict``
     The evaluation harness, not the method: ``pope_eval.py`` lines 59-64 and
     232-242, ``char_eval.py`` lines 31-36 and 157,
@@ -102,6 +111,8 @@ __all__ = [
     "reference_intervene",
     "reference_intervene_instructblip",
     "reference_jsd",
+    "reference_contrastive_fuse",
+    "reference_add_diffusion_noise",
     "reference_fuse",
 ]
 
@@ -548,3 +559,109 @@ def reference_pope_predict(out):
         else:
             pred_list.append(1)
     return pred_list
+
+
+# --------------------------------------------------------------------------- #
+# the compared baselines: VCD, ICD, SID
+# --------------------------------------------------------------------------- #
+# These three are one decoding rule with three ways of building the negative
+# branch, which is why they share a file in every repository that implements
+# them:
+#
+#   VCD  perturbs the IMAGE        -- forward diffusion to ``noise_step``
+#   ICD  perturbs the INSTRUCTION  -- prepends a negative role description
+#   SID  perturbs the VISION TOKENS INSIDE the model -- CT2S keeps only the
+#        least important ones after the early decoder layers
+#
+# The rule itself is a SUBTRACTION. Fox's fusion is ``z_obs + lambda*z_do``,
+# an addition with lambda >= 0, so it amplifies agreement; this amplifies
+# disagreement. They are not variants of one another.
+
+#: ``vcd_sample.py`` defaults, per repository. The formula is identical; the
+#: strength is not, and each project tuned its own.
+SID_CD_ALPHA = 0.5      # huofushuo/SID
+VCD_CD_ALPHA = 1.0      # the VCD release, and the Fox fork's dead branch
+CD_BETA = 0.1           # all three agree
+
+#: ``pope_eval.py:291`` in both SID and the Fox fork, verbatim.
+ICD_NEGATIVE_INSTRUCTION = "You are a confused object detector."
+
+#: ``--noise-step`` default in both.
+VCD_NOISE_STEP = 500
+
+
+def reference_contrastive_fuse(
+    next_token_logits: torch.Tensor,
+    next_token_logits_cd: torch.Tensor,
+    cd_alpha: float = SID_CD_ALPHA,
+    cd_beta: float = CD_BETA,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """``vcd_sample.py`` lines 176-184 of huofushuo/SID, transcribed.
+
+    Two things to read off it rather than assume:
+
+    The cutoff uses ``next_token_logits.max()`` alone -- the ORIGINAL
+    branch's maximum -- not the minimum of the two branches. The Fox fork's
+    dead ICD branch uses ``min(...)`` instead, so the fork had already
+    diverged here too. SID's is the one the baselines were published with.
+
+    The mask is applied on ``next_token_logits``, the original branch, while
+    the values masked are ``diffs``. So the plausibility constraint asks
+    "would the unperturbed model have considered this token at all", and only
+    then lets the contrast reorder what survives.
+
+    Returns ``(diffs, cd_logits)``: the released GREEDY path argmaxes
+    ``diffs`` unmasked and the SAMPLING path samples ``cd_logits``, the same
+    asymmetry Fox has.
+    """
+    cutoff1 = torch.log(torch.tensor(cd_beta, dtype=next_token_logits.dtype,
+                                     device=next_token_logits.device))
+    cutoff = cutoff1 + next_token_logits.max(dim=-1, keepdim=True).values
+
+    diffs = (1 + cd_alpha) * next_token_logits - cd_alpha * next_token_logits_cd
+
+    cd_logits = diffs.masked_fill(next_token_logits < cutoff, -float("inf"))
+    return diffs, cd_logits
+
+
+def reference_add_diffusion_noise(
+    image_tensor: torch.Tensor, noise_step: int
+) -> torch.Tensor:
+    """``vcd_add_noise.py``, whole file, transcribed.
+
+    The schedule is **sigmoid**, not the linear DDPM one::
+
+        betas = torch.linspace(-6, 6, 1000)
+        betas = torch.sigmoid(betas) * (0.5e-2 - 1e-5) + 1e-5
+
+    and it matters. At ``noise_step = 500`` this keeps ``sqrt(alpha_bar) =
+    0.863`` of the image, while a linear ``linspace(1e-4, 0.02)`` schedule
+    keeps 0.280 -- nearly white noise. An implementation that reached for the
+    familiar DDPM schedule would be contrasting against a different image
+    than VCD does, and would not be VCD.
+
+    Note also ``q_x(noisy_image, noise_step)`` indexes the schedule at
+    ``noise_step`` directly, not ``noise_step - 1``.
+    """
+    num_steps = 1000  # Number of diffusion steps
+
+    # decide beta in each step
+    betas = torch.linspace(-6, 6, num_steps)
+    betas = torch.sigmoid(betas) * (0.5e-2 - 1e-5) + 1e-5
+
+    # decide alphas in each step
+    alphas = 1 - betas
+    alphas_prod = torch.cumprod(alphas, dim=0)
+    alphas_bar_sqrt = torch.sqrt(alphas_prod)
+    one_minus_alphas_bar_sqrt = torch.sqrt(1 - alphas_prod)
+
+    def q_x(x_0, t):
+        noise = torch.randn_like(x_0)
+        alphas_t = alphas_bar_sqrt[t]
+        alphas_1_m_t = one_minus_alphas_bar_sqrt[t]
+        return (alphas_t * x_0 + alphas_1_m_t * noise)
+
+    noisy_image = image_tensor.clone()
+    image_tensor_cd = q_x(noisy_image, noise_step)
+
+    return image_tensor_cd

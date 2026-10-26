@@ -730,3 +730,55 @@ class TestBackboneProbe(unittest.TestCase):
         if r["verdict"] == "UNREACHABLE":
             self.skipTest("no network")
         self.assertEqual(r["visual_tokens"], 290 - 33 + 1)
+
+    def test_shikra_ships_no_image_processor_and_that_is_fine(self) -> None:
+        """A decoder that loads and cannot see is not runnable.
+
+        The probe originally judged Shikra PORTABLE from the decoder alone and
+        never looked at preprocessing. Shikra's repo has no
+        preprocessor_config.json -- which reads like a hole and is not: its
+        pixels go through CLIPImageProcessor from the vision tower named in
+        config.mm_vision_tower, and the release's clip_image_eval is a wrapper
+        around exactly that call with no logic of its own.
+        """
+        r = self._probe("shikras/shikra-7b-delta-v1-0708")
+        if r["verdict"] == "UNREACHABLE":
+            self.skipTest("no network")
+        pre = r["preprocessing"]
+        self.assertFalse(pre["ships_own"])
+        self.assertEqual(pre["source"], "vision_tower")
+        self.assertEqual(pre["repo"], "openai/clip-vit-large-patch14")
+        self.assertTrue(pre["source_repo_has_processor"])
+
+    def test_the_other_two_carry_their_own_processor(self) -> None:
+        for mid in ("llava-hf/llava-1.5-7b-hf",
+                    "Salesforce/instructblip-vicuna-7b"):
+            r = self._probe(mid)
+            if r["verdict"] == "UNREACHABLE":
+                self.skipTest("no network")
+            with self.subTest(model=mid):
+                self.assertTrue(r["preprocessing"]["ships_own"])
+
+    def test_an_unresolved_preprocessor_blocks_the_verdict(self) -> None:
+        """Not knowing how pixels are prepared is not the same as fine."""
+        import importlib.util
+        import sys as _sys
+
+        from foxrepro.storage import paths
+
+        spec = importlib.util.spec_from_file_location(
+            "_bbprobe2", paths().repo_root / "scripts" / "probe_backbone.py")
+        mod = importlib.util.module_from_spec(spec)
+        _sys.modules["_bbprobe2"] = mod
+        spec.loader.exec_module(mod)
+
+        # huggyllama/llama-7b is a text-only decoder: no processor anywhere,
+        # and none recorded, so the probe must not call it runnable.
+        try:
+            r = mod.probe("huggyllama/llama-7b")
+        except Exception as exc:                        # noqa: BLE001
+            self.skipTest(f"network unavailable: {exc}")
+        if r["verdict"] == "UNREACHABLE":
+            self.skipTest("no network")
+        self.assertEqual(r["verdict"], "UNCLEAR")
+        self.assertEqual(r["preprocessing"]["source"], "unknown")

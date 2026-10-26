@@ -314,6 +314,33 @@ arbitrary constant — it is this checkpoint's layout, hardcoded instead of
 derived, which is why it would silently mis-locate the image on any other
 prompt.
 
+**Where Shikra's pixels are prepared.** The checkpoint ships no
+`preprocessor_config.json`, which looks like a gap in the port and is not.
+`modeling_shikra.py:49-81` loads the vision tower as
+`CLIPVisionModel.from_pretrained(vision_tower)` — stock, at runtime, which is
+why no vision weights are in the checkpoint — and the image processor comes
+from the same repo. The release routes it through LAVIS, but
+`minigpt4/processors/clip_processors.py`'s `clip_image_eval` adds nothing at
+all:
+
+```python
+self.transform = CLIPImageProcessor.from_pretrained(proc_type)
+return self.transform.preprocess(item, return_tensors='pt')['pixel_values'][0]
+```
+
+So the whole visual path is reachable from the modern stack:
+
+```python
+proc = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
+vit  = CLIPVisionModel.from_pretrained("openai/clip-vit-large-patch14")
+h    = vit(pixel_values, output_hidden_states=True).hidden_states[-2][:, 1:]  # drop CLS -> 256
+emb  = nn.Linear(1024, 4096)(h)        # the two mm_projector tensors
+#      spliced between <im_start> and <im_end>
+```
+
+`mm_vision_select_layer: -2` is `hidden_states[-2]`, and `[:, 1:]`
+(`modeling_shikra.py:136`) drops the CLS token, leaving the 256 patches.
+
 `scripts/probe_backbone.py` reports all of this from `config.json` and the
 weight index — a few hundred kilobytes rather than 13-30 GiB — for any
 checkpoint, and is the thing to run before arguing about feasibility again.

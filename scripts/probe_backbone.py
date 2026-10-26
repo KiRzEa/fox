@@ -46,6 +46,37 @@ KNOWN = [
 LLAMA_SHAPE = ("hidden_size", "intermediate_size", "num_attention_heads",
                "num_hidden_layers")
 
+#: Where each backbone's IMAGE PREPROCESSING comes from.
+#:
+#: A checkpoint that loads is not a checkpoint that runs. Shikra ships no
+#: ``preprocessor_config.json`` at all, which looks like a hole and is not:
+#: its pixels are prepared by the vision tower's own processor, named in
+#: ``config.json`` as ``mm_vision_tower``. The released code confirms it --
+#: ``minigpt4/processors/clip_processors.py``'s ``clip_image_eval`` is a
+#: wrapper with no logic of its own::
+#:
+#:     self.transform = CLIPImageProcessor.from_pretrained(proc_type)
+#:     return self.transform.preprocess(item, return_tensors='pt')['pixel_values'][0]
+#:
+#: so the preprocessing is stock HuggingFace, reachable from the modern stack.
+PREPROCESSING = {
+    "llava-hf/llava-1.5-7b-hf": {
+        "source": "self", "repo": None,
+        "note": "ships its own preprocessor_config.json and processor_config.json",
+    },
+    "Salesforce/instructblip-vicuna-7b": {
+        "source": "self", "repo": None,
+        "note": "ships its own; also carries a Q-Former tokenizer",
+    },
+    "shikras/shikra-7b-delta-v1-0708": {
+        "source": "vision_tower", "repo": "openai/clip-vit-large-patch14",
+        "note": "no preprocessor in the checkpoint by design -- pixels go "
+                "through CLIPImageProcessor from the vision tower named in "
+                "config.mm_vision_tower. The release's clip_image_eval wraps "
+                "exactly that and adds nothing.",
+    },
+}
+
 #: Visual token counts, stated rather than inferred, because each comes from a
 #: different place: LLaVA expands <image> into patch tokens in input_ids,
 #: InstructBLIP feeds Q-Former queries, Shikra splices a projected CLIP grid
@@ -74,6 +105,16 @@ def _fetch(repo: str, name: str):
             return json.loads(fh.read())
     except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError):
         return None
+
+
+def _repo_files(repo: str):
+    """Filenames in a repo, for checking what it ships besides weights."""
+    url = f"https://huggingface.co/api/models/{repo}"
+    try:
+        with urllib.request.urlopen(url, timeout=30) as fh:
+            return [f["rfilename"] for f in json.loads(fh.read()).get("siblings", [])]
+    except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError):
+        return []
 
 
 def _weight_keys(repo: str):
@@ -115,7 +156,29 @@ def probe(model_id: str) -> dict:
 
     layout = VISUAL_LAYOUT.get(model_id, {})
 
-    if has_class:
+    # Does this repo carry its own image processor, and if not, is the one it
+    # points at reachable? A decoder that loads and cannot see is not runnable.
+    own_proc = [f for f in _repo_files(model_id)
+                if "preprocessor_config" in f or "processor_config" in f]
+    pre = dict(PREPROCESSING.get(model_id, {}))
+    if own_proc:
+        pre.setdefault("source", "self")
+        pre.setdefault("note", f"ships {', '.join(sorted(own_proc))}")
+    elif not pre:
+        pre = {"source": "unknown", "repo": None,
+               "note": "no preprocessor config in this repo and none recorded "
+                       "here -- find out where pixels are prepared before "
+                       "calling this runnable"}
+    pre["ships_own"] = bool(own_proc)
+    if pre.get("repo"):
+        pre["source_repo_has_processor"] = bool(
+            [f for f in _repo_files(pre["repo"]) if "preprocessor_config" in f])
+
+    if pre.get("source") == "unknown":
+        verdict = "UNCLEAR"
+        path = ("the decoder is reachable, but nothing here says how its "
+                "pixels are preprocessed. Resolve that before planning a run.")
+    elif has_class:
         verdict, path = "RUNNABLE", f"transformers ships {arch}"
     elif llama_like:
         verdict = "PORTABLE"
@@ -143,6 +206,7 @@ def probe(model_id: str) -> dict:
         "is_delta": "delta" in model_id,
         "visual_tokens": layout.get("visual_tokens"),
         "visual_note": layout.get("note"),
+        "preprocessing": pre,
         "verdict": verdict,
         "path": path,
     }
@@ -196,6 +260,14 @@ def main(argv=None) -> int:
         if r["visual_tokens"]:
             print(f"            visual span  : {r['visual_tokens']} tokens "
                   f"-- {r['visual_note']}")
+        pre = r.get("preprocessing") or {}
+        if pre:
+            where = ("its own repo" if pre.get("ships_own")
+                     else f"{pre.get('repo') or 'UNKNOWN'}")
+            print(f"            image proc   : {where}"
+                  + ("  [reachable]" if pre.get("source_repo_has_processor")
+                     else "")
+                  + f"\n                           {pre.get('note','')}")
         if r["is_delta"]:
             print(f"            NOTE         : this is a DELTA. It must be "
                   f"merged onto its base before use.")

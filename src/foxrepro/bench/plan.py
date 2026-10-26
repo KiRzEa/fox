@@ -705,6 +705,52 @@ def partition_by_priority(
     return sessions
 
 
+#: Provenance fields that must agree before two sets of records may share a
+#: run file. Not the full :data:`PROVENANCE_FIELDS`: a session legitimately
+#: runs at a newer commit, so ``commit_hash`` is allowed to differ. What may
+#: not differ is the machine the numbers came off.
+#:
+#: Round 4 is why this exists. Two CHAIR jobs ran on a Kaggle notebook with no
+#: accelerator attached and produced ~50 samples each on CPU before the wall.
+#: Deleting those records from the live runs directory did not help, because
+#: the session zips still held them: the next ingest merged them straight back
+#: in beside the GPU records that replaced them, by sample_id union, and
+#: produced two 500-record files that were 10% CPU. Greedy decoding is
+#: deterministic on one device; it is NOT device-independent, since fp16
+#: matmul on CPU and on CUDA accumulate differently. Those files were a
+#: corrupted run wearing the shape of a finished one.
+MERGE_COMPATIBLE_FIELDS = (
+    "n_gpus", "gpu_name", "torch_version", "compute_capability",
+    "transformers_version", "dtype", "decoding", "seed", "split",
+    "prompt_template_id", "system_prompt_id", "wrapper_id",
+    "mode", "logit_dtype", "softmax_dtype",
+)
+
+
+def _compatible_records(existing, incoming):
+    """Split ``incoming`` into records that may join ``existing``, and those
+    that may not.
+
+    Returns ``(accepted, reasons)``. ``reasons`` lists the distinct FIELDS
+    that disagreed, so the report can name what was wrong; the count of
+    refused records is ``len(incoming) - len(accepted)``, which is not the
+    same number and was reported as such once.
+    """
+    if not existing or not incoming:
+        return incoming, []
+    ref = existing[0]
+    accepted, reasons = [], set()
+    for rec in incoming:
+        bad = [f for f in MERGE_COMPATIBLE_FIELDS
+               if f in ref and f in rec and ref[f] != rec[f]]
+        if bad:
+            for f in bad:
+                reasons.add(f"{f}: {ref.get(f)!r} vs {rec.get(f)!r}")
+        else:
+            accepted.append(rec)
+    return accepted, sorted(reasons)
+
+
 def ingest_runs(
     sources: Sequence[Path] = (), dest: Optional[Path] = None,
     dry_run: bool = False, inbox: Optional[Path] = None,
@@ -787,7 +833,8 @@ def ingest_runs(
             staged.append(src)
     sources = staged
     report: Dict[str, object] = {
-        "dest": str(dest), "copied": 0, "merged": 0, "skipped": 0, "files": []
+        "dest": str(dest), "copied": 0, "merged": 0, "skipped": 0,
+        "rejected": 0, "files": []
     }
     for src_dir in sources:
         # rglob: a zip may have nested members even though pack_runs.sh is flat.
@@ -800,10 +847,21 @@ def ingest_runs(
                 report["files"].append(f"copied {src.name}")  # type: ignore[union-attr]
                 continue
             scan_run_file(target, repair=True)   # repair a partial tail first
-            have = {r.get("sample_id") for r in _records(target)}
+            existing = _records(target)
+            have = {r.get("sample_id") for r in existing}
             incoming = [
                 r for r in _records(src) if r.get("sample_id") not in have
             ]
+            before = len(incoming)
+            incoming, reasons = _compatible_records(existing, incoming)
+            n_refused = before - len(incoming)
+            if n_refused:
+                report["rejected"] = int(report.get("rejected", 0)) + n_refused
+                report["files"].append(  # type: ignore[union-attr]
+                    f"REFUSED {n_refused} record(s) from {src.name}, "
+                    f"incompatible with what is already there: "
+                    + "; ".join(reasons[:3])
+                )
             if not incoming:
                 report["skipped"] = int(report["skipped"]) + 1  # type: ignore[arg-type]
                 continue

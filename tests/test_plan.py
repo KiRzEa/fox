@@ -1119,3 +1119,112 @@ class TestChairDraws(unittest.TestCase):
             with self.subTest(split=split):
                 self.assertEqual(
                     Job("chair_draws", "fox", "chair", split).est_seconds(), base)
+
+
+class TestIngestRefusesIncompatibleRecords(unittest.TestCase):
+    """A run file may not mix records from two different machines.
+
+    Round 4 produced this exactly. Two CHAIR jobs ran on a Kaggle notebook
+    with no accelerator attached, managed ~50 samples each on CPU, and died
+    on the wall. Deleting those records from the live runs directory did not
+    settle it: the session zips still held them, so the next ingest merged
+    them straight back in beside the GPU records that replaced them -- by
+    sample_id union, which cannot tell the difference -- and produced two
+    500-record files that were 10% CPU.
+
+    Greedy decoding is deterministic on one device. It is NOT
+    device-independent: fp16 matmul accumulates differently on CPU and CUDA.
+    Those files were a corrupted run wearing the shape of a finished one.
+    """
+
+    def setUp(self) -> None:
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.tmp = Path(td.name)
+        self.dest = self.tmp / "runs"
+        self.dest.mkdir()
+        self.inbox = self.tmp / "inbox"
+        self.inbox.mkdir()
+
+    def _rec(self, sid: str, **over):
+        base = {
+            "sample_id": sid, "benchmark": "chair", "split": "val2014_500",
+            "seed": 42, "dtype": "fp16", "decoding": "greedy",
+            "method": "sampling", "mode": "as_implemented",
+            "logit_dtype": "native", "softmax_dtype": "fp32",
+            "prompt_template_id": "chair_v1", "system_prompt_id": "llava_v1",
+            "wrapper_id": "released", "transformers_version": "5.16.1",
+            "n_gpus": 2, "gpu_name": "Tesla T4", "compute_capability": "7.5",
+            "torch_version": "2.11.0+cu128", "commit_hash": "aaaaaaa",
+            "output": "a caption", "image_id": 1,
+        }
+        base.update(over)
+        return base
+
+    def _write(self, path: Path, recs) -> None:
+        path.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in recs))
+
+    def test_cpu_records_are_refused_into_a_gpu_file(self) -> None:
+        from foxrepro.bench.plan import ingest_runs
+
+        name = "m-sampling__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-x.jsonl"
+        self._write(self.dest / name, [self._rec(f"c/{i}") for i in range(10)])
+        self._write(self.inbox / name, [
+            self._rec(f"c/{i}", n_gpus=0, gpu_name=None,
+                      torch_version="2.11.0+cpu", compute_capability=None)
+            for i in range(10, 15)
+        ])
+        rep = ingest_runs([self.inbox], self.dest)
+        self.assertEqual(rep["rejected"], 5)
+        self.assertEqual(rep["merged"], 0)
+        kept = (self.dest / name).read_text().splitlines()
+        self.assertEqual(len(kept), 10)
+        self.assertTrue(all(json.loads(l)["n_gpus"] == 2 for l in kept))
+
+    def test_the_reason_names_the_field_that_disagreed(self) -> None:
+        from foxrepro.bench.plan import ingest_runs
+
+        name = "m-sampling__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-y.jsonl"
+        self._write(self.dest / name, [self._rec("c/0")])
+        self._write(self.inbox / name, [self._rec("c/1", n_gpus=0)])
+        rep = ingest_runs([self.inbox], self.dest)
+        joined = " ".join(rep["files"])
+        self.assertIn("REFUSED", joined)
+        self.assertIn("n_gpus", joined)
+
+    def test_a_newer_commit_is_still_allowed_to_merge(self) -> None:
+        """Sessions legitimately run at a newer commit; that is not a mix."""
+        from foxrepro.bench.plan import ingest_runs
+
+        name = "m-sampling__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-z.jsonl"
+        self._write(self.dest / name, [self._rec("c/0")])
+        self._write(self.inbox / name, [self._rec("c/1", commit_hash="bbbbbbb")])
+        rep = ingest_runs([self.inbox], self.dest)
+        self.assertEqual(rep.get("rejected", 0), 0)
+        self.assertEqual(rep["merged"], 1)
+        self.assertEqual(len((self.dest / name).read_text().splitlines()), 2)
+
+    def test_a_different_seed_or_arm_is_refused(self) -> None:
+        """Those belong in their own file; sharing one would hide the split."""
+        from foxrepro.bench.plan import ingest_runs
+
+        for field, value in (("seed", 43), ("decoding", "sampling"),
+                             ("logit_dtype", "fp32"), ("mode", "off")):
+            with self.subTest(field=field):
+                for stale in self.inbox.glob("*.jsonl"):
+                    stale.unlink()
+                name = f"m-x__b-chair__s-val2014_500__{field}.jsonl"
+                self._write(self.dest / name, [self._rec("c/0")])
+                self._write(self.inbox / name, [self._rec("c/1", **{field: value})])
+                rep = ingest_runs([self.inbox], self.dest)
+                self.assertEqual(rep["rejected"], 1, field)
+
+    def test_an_empty_destination_accepts_anything(self) -> None:
+        """There is nothing to be incompatible with on a first copy."""
+        from foxrepro.bench.plan import ingest_runs
+
+        name = "m-sampling__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-w.jsonl"
+        self._write(self.inbox / name, [self._rec("c/0", n_gpus=0)])
+        rep = ingest_runs([self.inbox], self.dest)
+        self.assertEqual(rep["copied"], 1)
+        self.assertEqual(rep.get("rejected", 0), 0)

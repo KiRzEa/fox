@@ -238,6 +238,38 @@ left over from debugging, and two of `vase.json`'s four are malformed —
 `"Waht are they doing?"` labelled `yes` and `"There are two"` labelled `no`.
 `popo_err.jsonl` is zero bytes.)
 
+### 3.10 A pre-cast fp16 checkpoint is not a deviation
+
+If a run points at `kietnt0603/instructblip-vicuna-7b-fp16` rather than
+`Salesforce/instructblip-vicuna-7b`, nothing about the numbers changes, and
+this records why so the provenance is not read as a confound later.
+
+`Salesforce/instructblip-vicuna-7b` stores its weights in **fp32**: 29.5 GiB
+of safetensors to occupy about 15.8 GiB of VRAM once
+`from_pretrained(dtype=torch.float16)` casts them at load. Every Kaggle
+session pays that transfer again, because every session starts from an empty
+disk. `scripts/cast_checkpoint_fp16.py` performs the same cast once and keeps
+the result, so a session downloads ~14.7 GiB instead.
+
+The cast is the identical operation `from_pretrained` already performs on
+every load -- round-to-nearest fp32 to fp16 on the same inputs -- so the
+weights are bit-identical, and `--verify` demonstrates that tensor by tensor
+rather than asserting it. The run records `model_id` in every record, so a
+pre-cast checkpoint is visible in the archive and cannot be mistaken for the
+original.
+
+**Quantization remains ruled out and this is not an exception to that.** The
+quantity under study is a precision effect, so an int8 or int4 checkpoint
+would alter the thing being measured; `Yhyu13/instructblip-vicuna-7b-gptq-4bit`
+and `Mediocreatmybest/instructblip-vicuna-7b_8bit` exist and must not be used
+here. fp16 is the dtype the runs already execute in.
+
+**Licensing.** The copy is **private**. `Salesforce/instructblip-vicuna-7b` is
+marked `license: other` and uses Vicuna-7b as its language model, which
+derives from LLaMA-1 -- research-only, with redistribution of derived weights
+restricted. A private repository is a copy for its owner rather than a public
+redistribution. Do not make it public.
+
 ### 3.9 Why only `sampling` and `fox` are re-run
 
 The paper's tables carry eight rows. This project runs two of them, and the

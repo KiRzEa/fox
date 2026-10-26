@@ -108,8 +108,20 @@ and 1.2–3.6 too high on CHAIR.
 | POPE-adv accuracy, sampling | **+4.23** [+2.92, +5.47] | +5.16 | reproduces — CI covers it |
 | CHAIR_S, sampling | **−7.20** [−12.00, −2.40] | −11.20 | reproduces — CI covers it |
 | CHAIR_I, sampling | **−4.07** [−5.79, −2.32] | −4.28 | reproduces — CI covers it |
-| CHAIR_S, greedy | **−3.00** [−7.40, +1.40] | −8.30 | **fails** — gap not resolvable, CI excludes −8.30 |
-| CHAIR_I, greedy | **−0.37** [−1.74, +0.99] | −3.24 | **fails** — gap not resolvable, CI excludes −3.24 |
+| CHAIR_S, greedy | **−2.72** [−5.77, +0.33] | −8.30 | **fails** — not resolvable, and excludes −8.30 |
+| CHAIR_I, greedy | **−0.55** [−1.25, +0.14] | −3.24 | **fails** — not resolvable, and excludes −3.24 |
+
+The two greedy CHAIR rows are now computed **over five independent 500-image
+draws**, with the image set as the sampling unit, rather than inside one draw.
+That matters: the gap moves 5.20 points across draws while the baseline it is
+computed from moves 3.40, so pairing does not absorb image-set variance here.
+The single-draw figures those rows used to carry (−3.00 and −0.37) came from
+the draw least favourable to Fox of the five. See
+[docs/DEVIATIONS.md](docs/DEVIATIONS.md) §3.8.1.
+
+**The sampling CHAIR rows above are not settled.** They are ten seeds on one
+image set, so their intervals are blind to the variance just measured. Read
+them as pending a second draw, not as excluding the paper.
 
 POPE and CHAIR intervals are exact McNemar and paired bootstrap respectively,
 both on the same samples.

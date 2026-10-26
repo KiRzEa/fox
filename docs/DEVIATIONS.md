@@ -345,6 +345,62 @@ emb  = nn.Linear(1024, 4096)(h)        # the two mm_projector tensors
 weight index — a few hundred kilobytes rather than 13-30 GiB — for any
 checkpoint, and is the thing to run before arguing about feasibility again.
 
+### 3.8.1 Measured: the image set does NOT explain the CHAIR gap
+
+Five independent 500-image draws, baseline and fox, greedy on each. The
+hypothesis in §3.8 was that image-set variance would cover the 3.88-point gap
+to the paper's baseline. It does not, and the measurement found something
+else instead.
+
+| draw | base CHAIR_S | fox CHAIR_S | gap | base CHAIR_I | fox CHAIR_I | gap |
+|---|---|---|---|---|---|---|
+| val2014_500 | 49.20 | 49.40 | **+0.20** | 13.82 | 13.66 | −0.17 |
+| val2014_500_d1 | 46.40 | 41.40 | **−5.00** | 12.96 | 11.91 | −1.05 |
+| val2014_500_d2 | 49.40 | 44.60 | −4.80 | 14.39 | 13.15 | −1.24 |
+| val2014_500_d3 | 49.80 | 49.40 | −0.40 | 14.81 | 14.81 | 0.00 |
+| val2014_500_d4 | 47.60 | 44.00 | −3.60 | 13.16 | 12.85 | −0.31 |
+
+**The hypothesis fails.** The paper's greedy baseline of 50.90 sits outside the
+observed range [46.40, 49.80], and its gap of −8.30 sits far outside
+[−5.00, +0.20]. Changing the image set does not reach the paper's numbers, so
+the discrepancy needs an account beyond "a different 500 images".
+
+**And the gap is less stable than the absolute number it is computed from.**
+The baseline's own CHAIR_S moves 3.40 points across draws; the gap moves
+**5.20**. Pairing is supposed to absorb item difficulty, and for CHAIR across
+image sets it does not — the two arms respond to a change of images
+differently enough that the difference is noisier than either term.
+
+Treating the image set as the sampling unit, with five draws and df=4:
+
+| | mean gap [95% CI] | p | contains 0 | paper |
+|---|---|---|---|---|
+| CHAIR_S | **−2.72** [−5.77, +0.33] | 0.069 | **yes** | −8.30, excluded |
+| CHAIR_I | **−0.55** [−1.25, +0.14] | 0.090 | **yes** | −3.24, excluded |
+
+So under greedy decoding, once image-set variance is admitted, **Fox's CHAIR
+effect is not resolvable at all** — and the paper's claimed effect is excluded
+from the other side.
+
+**This also indicts an earlier claim of our own.** "CHAIR greedy gives a null"
+was stated from `val2014_500` alone, with an interval computed inside that one
+draw. The conclusion survives, but the reasoning behind it was blind to the
+variance component that turns out to dominate. Worse, `val2014_500` is the
+draw least favourable to Fox of the five (+0.20, the only non-negative gap);
+drawing `d1` first would have produced −5.00 and a different story from the
+same method.
+
+**Consequence for the sampling result, which is not yet settled.** The
+ten-seed sampling comparison — CHAIR_S −6.98 [−9.25, −4.71], reported as
+excluding the paper's −11.20 — is computed on `val2014_500` only. Its interval
+sees seed variance and item difficulty and is blind to image-set variance,
+which is measured here at sd 2.46 under greedy. That claim should be read as
+**not established** until the ten-seed comparison is repeated on a second
+draw. The POPE conclusions are unaffected: POPE uses its own fixed official
+annotation files, so there is no equivalent degree of freedom.
+
+Reproduce with `scripts/chair_image_set_sensitivity.py`.
+
 ### 3.9 Why only `sampling` and `fox` are re-run
 
 The paper's tables carry eight rows. This project runs two of them, and the

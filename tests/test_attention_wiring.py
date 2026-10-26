@@ -642,3 +642,91 @@ class TestCpuOnlyHostIsRefused(unittest.TestCase):
         a = GenConfig(**base).run_key().filename()
         b = GenConfig(**base, allow_cpu=True).run_key().filename()
         self.assertEqual(a, b)
+
+
+class TestBackboneProbe(unittest.TestCase):
+    """What it takes to run each backbone, decided from metadata not memory.
+
+    Arguing from memory about what transformers supports produced a wrong
+    answer about Shikra that stood for several days: it was called a Track A
+    job needing transformers 4.29.2, when its decoder is a plain LLaMA-7B
+    carrying two extra projector tensors. The probe reads config.json and the
+    weight index -- a few hundred kilobytes -- and says so.
+    """
+
+    def _probe(self, model_id: str) -> dict:
+        import importlib.util
+        import sys as _sys
+
+        from foxrepro.storage import paths
+
+        spec = importlib.util.spec_from_file_location(
+            "_bbprobe", paths().repo_root / "scripts" / "probe_backbone.py")
+        mod = importlib.util.module_from_spec(spec)
+        _sys.modules["_bbprobe"] = mod
+        spec.loader.exec_module(mod)
+        try:
+            return mod.probe(model_id)
+        except Exception as exc:                        # noqa: BLE001
+            self.skipTest(f"network unavailable: {exc}")
+
+    def test_llava_is_runnable_as_is(self) -> None:
+        r = self._probe("llava-hf/llava-1.5-7b-hf")
+        if r["verdict"] == "UNREACHABLE":
+            self.skipTest("no network")
+        self.assertEqual(r["verdict"], "RUNNABLE")
+        self.assertTrue(r["transformers_has_class"])
+        self.assertEqual(r["visual_tokens"], 576)
+
+    def test_instructblip_is_runnable_but_its_visual_span_differs(self) -> None:
+        """32 Q-Former queries, not 576 patches. H_vis changes meaning."""
+        r = self._probe("Salesforce/instructblip-vicuna-7b")
+        if r["verdict"] == "UNREACHABLE":
+            self.skipTest("no network")
+        self.assertEqual(r["verdict"], "RUNNABLE")
+        self.assertEqual(r["visual_tokens"], 32)
+
+    def test_shikra_is_a_llama_decoder_plus_two_tensors(self) -> None:
+        """The correction this probe exists to make.
+
+        ShikraLlamaForCausalLM has no transformers class, which looked like a
+        blocker. But the decoder is LLaMA-7B exactly -- 32 layers, 4096 hidden,
+        32 heads, 11008 ffn -- and the checkpoint carries precisely two tensors
+        beyond it: mm_projector weight and bias. A linear 1024 -> 4096, with
+        the vision tower being stock openai/clip-vit-large-patch14 loaded
+        separately. That is a port, not a vendored stack.
+        """
+        r = self._probe("shikras/shikra-7b-delta-v1-0708")
+        if r["verdict"] == "UNREACHABLE":
+            self.skipTest("no network")
+        self.assertEqual(r["verdict"], "PORTABLE")
+        self.assertFalse(r["transformers_has_class"])
+        self.assertTrue(r["decoder_is_llama_7b"])
+        self.assertEqual(
+            sorted(r["tensors_outside_llama_decoder"]),
+            ["model.mm_projector.bias", "model.mm_projector.weight"],
+        )
+        self.assertTrue(r["is_delta"])
+
+    def test_the_fox_patch_reaches_every_backbone_the_paper_uses(self) -> None:
+        """Which is why the release evaluates three models with one patch.
+
+        Fox patches LLaMA attention. Anything whose decoder is LLaMA inherits
+        the intervention without a second implementation -- that is the answer
+        to "how did the authors run Shikra at all".
+        """
+        for mid in ("llava-hf/llava-1.5-7b-hf",
+                    "Salesforce/instructblip-vicuna-7b",
+                    "shikras/shikra-7b-delta-v1-0708"):
+            r = self._probe(mid)
+            if r["verdict"] == "UNREACHABLE":
+                self.skipTest("no network")
+            with self.subTest(model=mid):
+                self.assertTrue(r["fox_patch_reaches_decoder"])
+
+    def test_shikras_hardcoded_span_is_explained_by_its_config(self) -> None:
+        """img_s==33, img_e==290 is 258 tokens: 256 patches + 2 markers."""
+        r = self._probe("shikras/shikra-7b-delta-v1-0708")
+        if r["verdict"] == "UNREACHABLE":
+            self.skipTest("no network")
+        self.assertEqual(r["visual_tokens"], 290 - 33 + 1)

@@ -33,7 +33,7 @@ Lý do bỏ qua, không phải vì lười mà vì từng cái có rào cản ri
 | bỏ qua | vì sao |
 |---|---|
 | **InstructBLIP** | Nó chạy **bản copy thứ hai** của can thiệp (`minigpt4/models/modeling_llama.py`), bản này **bỏ hẳn `m_sys`** khỏi Eq. 4 và dùng layer 4–10, k=0.4. Đó là **một phương pháp khác**, không phải đổi backbone. Paper không nói bảng nào do bản nào sinh ra |
-| **Shikra** | Không có bản HF conversion được bảo trì; release xác định vùng ảnh bằng số ma thuật `img_s == 33 and img_e == 290` |
+| **Shikra** | **Port được**, không phải blocker môi trường như từng nghĩ. `ShikraLlamaForCausalLM` không có trong transformers, nhưng decoder **chính là LLaMA-7B** và checkpoint chỉ thừa **hai tensor**: `mm_projector.{weight,bias}`. Chi phí thật là merge delta (~27 GB) và viết phần projector + splice embedding. Xem [`DEVIATIONS.md`](DEVIATIONS.md) §3.11 |
 | **MME** | Release **không ship script MME nào** dù có báo cáo kết quả MME |
 | **GPT-4V judge** | API trả phí |
 | **ICD / SID / OPERA / CausalMM** | Mỗi cái cần codebase riêng. Repo Fox **không chứa CausalMM**, SID không có cờ chạy. Thứ chạy được ở đây là nhánh nhiễu kiểu VCD trong fusion của Fox — **không phải VCD thật** |
@@ -50,6 +50,18 @@ từ đó là đúng.
 > so với paper gốc của VCD và **ngược dấu** (VCD cải thiện trong paper của
 > chính nó, làm tệ đi trong paper Fox). Nói nhầm thành "họ chép số" là một
 > cáo buộc mà bằng chứng không ủng hộ. Chi tiết: [`DEVIATIONS.md`](DEVIATIONS.md) §3.9.
+
+Kiểm nhanh bất kỳ backbone nào, không cần tải trọng số:
+
+```bash
+python3 scripts/probe_backbone.py          # cả ba, đọc config.json + weight index
+```
+
+```
+[RUNNABLE ] llava-hf/llava-1.5-7b-hf              576 visual tokens
+[RUNNABLE ] Salesforce/instructblip-vicuna-7b      32 visual tokens (Q-Former)
+[PORTABLE ] shikras/shikra-7b-delta-v1-0708       258 visual tokens, +2 tensors
+```
 
 Hệ quả cần nhớ khi viết: mọi kết luận của dự án này là về **LLaVA-1.5**.
 Chúng mạnh ở đó (10 seed, TOST, Holm), nhưng **không** tự động áp cho hai

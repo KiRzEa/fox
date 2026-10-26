@@ -270,6 +270,54 @@ derives from LLaMA-1 -- research-only, with redistribution of derived weights
 restricted. A private repository is a copy for its owner rather than a public
 redistribution. Do not make it public.
 
+### 3.11 How the release runs three backbones with one patch
+
+Worth understanding, because it was got wrong here first and because it
+explains a hardcoded constant that otherwise looks arbitrary.
+
+**Fox patches LLaMA attention**, in
+`transformers/src/transformers/models/llama/modeling_llama.py`. Anything whose
+decoder *is* LLaMA inherits the intervention without a second implementation.
+That is the whole mechanism by which `pope_eval.py` offers a `shikra` entry in
+`INSTRUCTION_TEMPLATE` beside `llava-1.5`.
+
+`shikras/shikra-7b-delta-v1-0708/config.json` makes it concrete:
+
+```json
+"architectures": ["ShikraLlamaForCausalLM"],  "model_type": "shikra",
+"hidden_size": 4096, "intermediate_size": 11008,
+"num_attention_heads": 32, "num_hidden_layers": 32,   <- LLaMA-7B exactly
+"mm_hidden_size": 1024, "use_mm_proj": true,
+"mm_vision_tower": "openai/clip-vit-large-patch14",   <- stock, not bundled
+"vocab_size": 32003                                    <- 32000 + 3 markers
+```
+
+and its weight index carries 325 tensors of which exactly **two** sit outside
+a plain LLaMA decoder: `model.mm_projector.weight` and
+`model.mm_projector.bias` — a single linear 1024 -> 4096. The vision tower is
+downloaded separately from HuggingFace.
+
+**The correction.** An earlier note here concluded Shikra needs the release's
+`modeling_shikra.py`, therefore transformers 4.29.2, therefore Python 3.10,
+therefore not Kaggle. The first step does not follow. A decoder that is LLaMA
+loads as `LlamaForCausalLM` on any modern transformers; what has to be written
+is the projector and the embedding splice, which is two tensors and a CLIP
+forward. The real costs are the delta merge (`huggyllama/llama-7b` plus the
+delta, ~27 GB down, ~40 GB transient) and the port, not the environment.
+
+**And the magic numbers are explained.** The release detects Shikra's visual
+span by testing `img_s == 33 and img_e == 290`. CLIP ViT-L/14 at 224 px gives
+a 16x16 grid = 256 patches; `mm_use_im_start_end: true` wraps them in
+`<im_start>` and `<im_end>`; 256 + 2 = **258**, and 290 - 33 + 1 = 258. The
+33 is the token offset of the system message plus `USER: `. It is not an
+arbitrary constant — it is this checkpoint's layout, hardcoded instead of
+derived, which is why it would silently mis-locate the image on any other
+prompt.
+
+`scripts/probe_backbone.py` reports all of this from `config.json` and the
+weight index — a few hundred kilobytes rather than 13-30 GiB — for any
+checkpoint, and is the thing to run before arguing about feasibility again.
+
 ### 3.9 Why only `sampling` and `fox` are re-run
 
 The paper's tables carry eight rows. This project runs two of them, and the
@@ -346,7 +394,7 @@ hyperparameters" despite Algorithm 1 taking it as an input.
 | | Why |
 |---|---|
 | InstructBLIP path | It is a **second, divergent copy** of the intervention (`minigpt4/models/modeling_llama.py`) that drops `m_sys` from Eq. 4 entirely and uses layers 4–10 with k=0.4. A different method, not a backbone swap. |
-| Shikra path | `shikras/shikra-7b-delta-v1` is public, but it is a **delta** needing `huggyllama/llama-7b` merged in (27 GB of download, ~40 GB transient disk). The blocker is not size — it is 7B, the same as the LLaVA-1.5 already running here. It is that transformers has no Shikra class, so it needs the release's `minigpt4/models/modeling_shikra.py`, which needs transformers 4.29.2, which needs Python 3.10. Kaggle is 3.13. Shikra is a different host, not another session. The release also finds its visual span by the magic numbers `img_s == 33 and img_e == 290`. |
+| Shikra path | **Correction, see §3.11.** Earlier notes here called this a Track A job needing transformers 4.29.2. That was wrong: `ShikraLlamaForCausalLM` has no transformers class, but its decoder is a plain LLaMA-7B and the checkpoint carries exactly two tensors beyond one — `model.mm_projector.{weight,bias}`. It is a port on the modern stack, not a vendored environment. It is still a delta needing `huggyllama/llama-7b` merged in. |
 | InstructBLIP path, practically | `Salesforce/instructblip-vicuna-7b` is public and transformers ships `InstructBlipForConditionalGeneration`, so unlike Shikra it can run on the modern stack. Costs: 31.7 GB to download (stored fp32; ~15.8 GB in VRAM once cast, which 2x T4 holds sharded). The work is porting, not hosting — see the row above on the second intervention copy, and note the visual span is **32 Q-Former query tokens**, not 576 patch tokens, so `H_vis` is an entropy over 32 positions instead of 576. |
 | FastV / OPERA plumbing | Present in the release as argparse flags, all `default=False`, with no reweighting behind the SID one. |
 | HF `logits_processor` | We apply the warpers (temperature, top-p) but not the processor list, which is empty by default for this configuration. |

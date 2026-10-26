@@ -410,7 +410,7 @@ def register_method(cls: Type[Method]) -> Type[Method]:
 #: not in ``bench/methods.py`` is now a test failure rather than a phantom
 #: entry in ``--list-methods``.
 _GPU_METHODS = frozenset({
-    "sampling", "fox", "vcd", "icd", "sid", "vcd_fox_fusion",
+    "sampling", "fox", "vcd", "icd", "sid", "causalmm", "vcd_fox_fusion",
 })
 
 

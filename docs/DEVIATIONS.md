@@ -431,14 +431,14 @@ and `--opera` flags, and `vcd_sample.py:153` comments its shared path
 `# for VCD and SID`, with a leftover author path pointing at
 `/home/kdzlys/sid2/log/`.
 
-The one exception is **CausalMM**, which appears nowhere in the released
+The one exception is **CausalMM**, which appears nowhere in the *Fox*
 repository and cannot be run from it. Whether its row was re-run elsewhere or
-taken from its own paper is not determinable from what was published.
+taken from its own paper is not determinable from what Fox published.
+CausalMM's **own** repository is public and complete — see §3.13, which
+corrects an earlier version of this paragraph that said it was unavailable.
 
 **Superseded, 2026-10-27.** Three of the six are now implemented and run as
-themselves — see §3.12. What is left is OPERA (its own beam search with
-rollback, and it cannot share the nucleus-sampling protocol) and CausalMM
-(absent from every released repository).
+themselves — see §3.12, and §3.13 for where OPERA and CausalMM stand.
 
 Worth recording for the write-up: VCD's paper reports a standard deviation
 beside every number (`83.29(±0.35)`). Fox claims "a two-sided t-test
@@ -529,6 +529,157 @@ files are relabelled `vcd_fox_fusion` on read, keyed on the
 `method_extra.variant` the records themselves carry
 (`evaluate.LEGACY_METHOD_NAMES`). The files are not edited; the numbers are
 unchanged and were always labelled correctly inside.
+
+### 3.13 OPERA and CausalMM, read from their own repositories
+
+Both were cloned to `refs/` and read. They are not in the same position, and
+an earlier version of §3.9 was wrong about CausalMM.
+
+#### CausalMM — portable, and the same decoding rule again
+
+[The-Martyr/CausalMM](https://github.com/The-Martyr/CausalMM) ships a
+complete LLaVA-1.5 + POPE pipeline (`llava-1.5/experiments/`). The eval
+script imports `causalmm_cf.causalmm_sm`, and that sampler is:
+
+```
+gamma   = 1.0                       # llava1.5_eval.bash; the code default is 0.5
+epsilon = 0.6                       # ditto; the code default is 0.1
+cutoff  = log(epsilon) + z_obs.max()
+diffs   = (1 + gamma) * z_obs - gamma * z_cf
+cf_logits = diffs.masked_fill(z_obs < cutoff, -inf)
+next    = multinomial(softmax(warp(cf_logits)))
+```
+
+That is **the rule VCD, ICD and SID already share** (§3.12), with `gamma` in
+`cd_alpha`'s slot and `epsilon` in `cd_beta`'s. Four of the five compared
+methods are one formula; only the negative branch differs. That is the single
+most useful structural fact in this comparison and neither paper states it.
+
+The negative branch is a **vision counterfactual**, built in
+`llava/model/multimodal_encoder/cf_encoder.py`: run CLIP with
+`output_attentions=True`, take layer `-2`'s attention, shuffle it, bilinearly
+resize to 24x24, average over heads, multiply element-wise into the
+**pre-projector** image features, then project. Pre-projector matters — the
+projector is a 2-layer GELU MLP, so scaling before it is not scaling after.
+
+Portable to our stack with no transformers-internals surgery.
+`LlavaModel.get_image_features` on transformers 4.57.6 has the identical
+shape (`hidden_states[config.vision_feature_layer][:, 1:]` ->
+`multi_modal_projector`, and `vision_feature_layer` is already `-2`) and
+forwards `**kwargs` to the vision tower, so `output_attentions=True` is
+threadable. CausalMM patches `GenerationMixin.sample` at runtime against
+*stock* transformers 4.31.0 rather than vendoring a fork, which is why it
+ports and OPERA does not.
+
+Protocol differences to carry into the table: `top_p=1` (no nucleus
+truncation at all, against 0.9 everywhere else), `max_new_tokens=1024` on
+POPE, `seed=55`, and `epsilon=0.6` — a far tighter plausibility cutoff than
+the 0.1 the other three use.
+
+Three defects, recorded rather than fixed:
+
+* `cf_encoder.get_attentions` reshapes to a square grid only when the
+  attention is 3-D. CLIP's is 4-D `[B, H, 577, 577]`, so the reshape is
+  skipped and what gets bilinearly resized to 24x24 is the full 577x577
+  attention **matrix**, not a spatial map. It runs; it is not what the
+  README's visualisations show.
+* `edit_attention`'s `shuffle` calls `torch.randperm` with no generator, so
+  the counterfactual is drawn from global RNG and is seeded only by
+  `set_seed`. Same class of defect as VCD's noise (§3.12).
+* the `type(images) is list` branch returns `image_features`, which that
+  branch never assigns — a `NameError`. Dead on POPE, which passes a single
+  tensor.
+
+`causalmm_cf/causalmm_mm.py` (the two-counterfactual version,
+`diffs = (1 + 2g) z_obs - g z_cf_v - g z_cf_l`) is **dead code in this
+release**: it unpacks a 3-tuple from a forward that returns 2, and no shipped
+model provides the third. The published POPE numbers are the single-branch
+version.
+
+**Measured here: the counterfactual branch is close to image-blind.** This is
+the finding worth carrying into the write-up, and it is structural rather
+than incidental.
+
+Each CLIP attention row is a softmax over 577 keys, so it sums to 1 and the
+whole `[577, 577]` matrix sums to 577 — mean entry `1/577 = 0.00173`. A
+permutation cannot change a mean; neither bilinear resizing nor averaging
+over heads does. So the per-token gain
+`cf_weight_features` applies has mean `1/577` whatever the image is.
+Measured on a real (tiny-width, correct-geometry)
+`LlavaForConditionalGeneration`: `cf_gain_mean = 0.00172`,
+`cf_gain_std = 0.00015`, i.e. an almost uniform downscale by ~580x. After the
+projector's GELU an input scaled down 580-fold is near-constant, so `z_cf` is
+approximately "the model with no image at all".
+
+So CausalMM's negative branch is, numerically, a **blind branch** — not the
+spatially-shuffled read its figures show. That is arguably faithful to the
+paper's stated intent (it is about *modality prior*-induced hallucination, so
+removing the visual contribution is the point) but it is not the mechanism the
+method is described by, and it makes CausalMM much closer to a language-prior
+contrast than to VCD's noised-image contrast. Asserted in
+`tests/test_kernel_equivalence.py::TestCausalMMBitEquality` and
+`tests/test_tiny_llava.py`, so if a port ever stops having this property the
+suite fails rather than the table quietly changing.
+
+**One deviation forced by the stack.** On transformers 4.31.0, which CausalMM
+targets, `output_attentions=True` silently fell back to eager attention. From
+~4.52 onward it does not: SDPA warns once and returns `None`, so a direct
+port builds its counterfactual out of nothing. `causalmm_vision` therefore
+switches the vision tower to eager for that one call and restores it
+afterwards, and raises if the attentions still come back `None`.
+
+The consequence is recorded rather than hidden: eager CLIP does not agree
+with SDPA CLIP in the last bits, so **this arm's clean branch is not
+bit-identical to the clean branch of every other arm in this repo**.
+Measured: `3.9e-3` max absolute difference in the selected hidden states in
+fp16 on a stand-in, `1.1e-8` in fp32. It is faithful — CausalMM derives both
+branches from one eager forward — and it is called out because this
+project's own result is that a last-bits fp16 difference in attention moved
+POPE by 2.8 points, so "the last bits do not matter" is the one assumption
+not available here. `describe()` records
+`clean_branch_bit_identical_to_other_arms: false` on every CausalMM run.
+
+#### OPERA — not portable, and half of it is inert on POPE
+
+[shikiw/OPERA](https://github.com/shikiw/OPERA) implements
+`opera_beam_search` in **559 lines** (lines 3116-3675) inside a *vendored,
+patched* `transformers-4.29.2/src/transformers/generation/utils.py`. Unlike
+CausalMM's runtime patch, it rewrites beam search against 4.29.2 internals,
+and it **snapshots and restores** `input_ids`, `beam_scorer`, `beam_scores`,
+`beam_indices`, `cur_len` and the KV cache in order to roll back. None of
+that survives transformers 5.x, where the scorer and the cache are different
+objects. It also needs the full post-softmax
+`[B x beams, heads, q+1, kv+1]` attention of the last layer — the tensor our
+own §Three-traps note records as coming back as `()` from ~4.52 onward.
+
+`opera_greedy_search` is `assert False, "OPERA does not support beam=1 in the
+current version"`. Beam >= 2 is mandatory, so this arm can never share the
+nucleus-sampling protocol the other arms are compared under, which is why the
+paper's own Table 1 footnote has to treat it separately.
+
+Cost is **not** the blocker, contrary to what we assumed. Per decode step it
+runs 1 main forward plus `num_attn_candidates = 5` speculative re-forwards at
+batch `= 5` beams, so roughly 6x per token: about 2.8 h for POPE-adversarial
+and 7-10 h for a 500-caption CHAIR run, per seed. That fits a session.
+
+**On POPE, OPERA's second contribution cannot fire.** `pope_eval.py` sets
+`max_new_tokens=10`, and two independent conditions then exclude rollback:
+
+1. `penalty_scores = -attn_scores if cur_response_lens <= 10 else
+   rollback_scores`, and `cur_response_lens = attn_local.shape[-1]` is the
+   number of response tokens so far, so it never exceeds 10. The rollback
+   score is never selected.
+2. the rollback gate is
+   `all((rollback_loc_gather == rollback_loc).sum() > threshold)` with
+   `threshold = 15`, over a tensor with one column per step — at most 10
+   columns, so the count cannot reach 15. And the body opens with
+   `if rollback_loc < 10: assert False`.
+
+So OPERA-on-POPE reduces to **beam search (5 beams) plus a bonus equal to the
+candidate's total attention over the image span, at weight 1.0**
+(`candidate_token_scores -= penalty_weights * (-attn_scores)`). The
+retrospection-reallocation half — the paper's named second mechanism — is
+reachable only on CHAIR, where `max_new_tokens=512`.
 
 ### 3.6 Hyperparameter defaults come from the code, not the paper
 

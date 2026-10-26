@@ -45,6 +45,9 @@ from foxrepro.bench.generate import (
 from foxrepro.data.loaders import Sample
 from foxrepro.fox.reference import SID_AGG_LAYER as _REF_SID_AGG_LAYER
 from foxrepro.fox.reference import SID_ATTENTION_RANK as _REF_SID_ATTENTION_RANK
+from foxrepro.fox.reference import CAUSALMM_EDIT_METHOD as _REF_CAUSALMM_EDIT_METHOD
+from foxrepro.fox.reference import CAUSALMM_EPSILON as _REF_CAUSALMM_EPSILON
+from foxrepro.fox.reference import CAUSALMM_GAMMA as _REF_CAUSALMM_GAMMA
 from foxrepro.storage import SYSTEM_PROMPT_IDS, WRAPPER_IDS
 
 #: Conversation wrappers, selected by ``--wrapper``.
@@ -181,6 +184,12 @@ VCD_NOISE_STEP_DEFAULT = 500
 #: transcription cannot leave the method running the old value.
 SID_AGG_LAYER = _REF_SID_AGG_LAYER
 SID_ATTENTION_RANK = _REF_SID_ATTENTION_RANK
+
+#: CausalMM's published values, from ``llava1.5_eval.bash`` -- not the
+#: sampler's own defaults, which are 0.5 and 0.1.
+CAUSALMM_GAMMA = _REF_CAUSALMM_GAMMA
+CAUSALMM_EPSILON = _REF_CAUSALMM_EPSILON
+CAUSALMM_EDIT_METHOD = _REF_CAUSALMM_EDIT_METHOD
 
 
 def _refuse_untracked_override(name: str, value: Any, default: Any) -> Any:
@@ -629,7 +638,12 @@ class _ContrastiveMethod(_LlavaMethod):
         # Recorded, not implied: these rows must be readable as "no head edit
         # happened here" without re-reading the class. Fox's intervention
         # being off is what makes them baselines.
-        info["mode"] = "off"
+        #
+        # Deliberately NOT called "mode": the record's own `mode` field is
+        # cfg.mode, which stays "as_implemented" for these arms, and two keys
+        # with one name and two values is how a provenance field stops being
+        # evidence.
+        info["fox_intervention"] = "off"
         info["intervention"] = "none"
         return info
 
@@ -796,3 +810,70 @@ class SIDMethod(_ContrastiveMethod):
         d["sid_agg_layer"] = self.agg_layer
         d["sid_rank"] = self.rank
         return d
+
+
+@register_method
+class CausalMMMethod(_ContrastiveMethod):
+    """CausalMM (Zhou et al., ICLR 2025): contrast against a shuffled read.
+
+    Same image, same prompt, same model. The negative branch is built in the
+    **vision tower**: CLIP's layer -2 attention is shuffled, resized to the
+    24x24 feature grid, averaged over heads and multiplied into the
+    pre-projector visual features. So the contrast is between the model
+    reading the image and the model reading the image with its own visual
+    attention scrambled.
+
+    The decoding rule is the one VCD, ICD and SID already share. CausalMM
+    calls the coefficients ``gamma`` and ``epsilon``, but
+    ``(1 + gamma) z_obs - gamma z_cf`` with ``log(epsilon)`` as the cutoff is
+    ``(1 + cd_alpha) z_obs - cd_alpha z_cd`` with ``log(cd_beta)``, term for
+    term. Four of the five compared methods are one formula.
+
+    Its published values are NOT the sampler's defaults:
+    ``llava1.5_eval.bash`` passes ``gamma=1.0`` (default 0.5) and
+    ``epsilon=0.6`` (default 0.1). ``epsilon=0.6`` is a much tighter
+    plausibility cutoff than the 0.1 the other three use, and unlike SID
+    this harness never argmaxes the unmasked logits, so here the cutoff
+    actually binds.
+
+    Two protocol differences to carry into any table built from this arm:
+    the released script runs ``top_p=1`` -- no nucleus truncation at all,
+    against 0.9 everywhere else in this comparison -- and
+    ``max_new_tokens=1024`` on POPE. Neither is changed here; this class
+    sets the method, and the protocol stays the shared one so the arms remain
+    comparable. Both are recorded in docs/DEVIATIONS.md Sec 3.13.
+    """
+
+    name = "causalmm"
+    cd_alpha: ClassVar[float] = CAUSALMM_GAMMA
+    cd_beta: ClassVar[float] = CAUSALMM_EPSILON
+
+    #: ``edit_attention``'s own default, and the only value the released call
+    #: site can produce. The other three are the paper's ablation.
+    edit: ClassVar[str] = CAUSALMM_EDIT_METHOD
+
+    def __init__(self, cfg: GenConfig) -> None:
+        super().__init__(cfg)
+        self.edit = str(_refuse_untracked_override(
+            "cf_edit",
+            str((cfg.extra or {}).get("cf_edit", type(self).edit)),
+            type(self).edit))
+
+    def _negative(self, inputs, sample, prompt, generator):
+        """Nothing external: the counterfactual is built inside the encoder."""
+        return {"cf_vision": True, "cf_edit": self.edit}
+
+    def _record(self) -> Dict[str, Any]:
+        d = super()._record()
+        d["cf_edit"] = self.edit
+        return d
+
+    def describe(self) -> Dict[str, Any]:
+        info = dict(super().describe())
+        # Not a choice, and not hideable: output_attentions=True puts CLIP on
+        # its eager path and the hidden states move (3.9e-3 in fp16 on a
+        # stand-in). CausalMM derives both branches from that one forward, so
+        # this arm's clean branch is not bit-identical to the other arms'.
+        info["clean_branch_bit_identical_to_other_arms"] = False
+        info["vision_tower_attn"] = "eager (forced by output_attentions)"
+        return info

@@ -712,3 +712,101 @@ class TestCt2sBitEquality(unittest.TestCase):
         probs = torch.rand(1, 1, 6, 6)
         got = ct2s_keep(probs, 1, 3, rank=100)
         self.assertEqual(int(got.numel()), 3)
+
+
+class TestCausalMMBitEquality(unittest.TestCase):
+    """CausalMM's vision counterfactual, against the transcribed original.
+
+    The dtype sequence is the part most likely to drift: interpolate and mean
+    run in the attention's dtype, the multiply in the features' dtype, and
+    the result is cast to fp16 unconditionally. Doing any of that in fp32
+    "for accuracy" would make this a different negative branch.
+    """
+
+    def _inputs(self, dtype, seed=7, heads=4, keys=65, n_tok=36, dim=32):
+        g = torch.Generator().manual_seed(seed)
+        attn = torch.rand(1, heads, keys, keys, generator=g, dtype=torch.float32)
+        attn = attn / attn.sum(dim=-1, keepdim=True)   # real attention rows
+        feats = torch.rand(1, n_tok, dim, generator=g, dtype=torch.float32)
+        return attn.to(dtype), feats.to(dtype)
+
+    def test_shuffle_matches_the_reference(self) -> None:
+        from foxrepro.fox.kernel import cf_shuffle_attention
+        from foxrepro.fox.reference import reference_edit_attention
+
+        for dtype in (torch.float32, torch.float16):
+            with self.subTest(dtype=dtype):
+                attn, _ = self._inputs(dtype)
+                torch.manual_seed(99)
+                want = reference_edit_attention(attn, "shuffle")
+                got = cf_shuffle_attention(
+                    attn, generator=torch.Generator().manual_seed(99))
+                self.assertTrue(torch.equal(want, got))
+
+    def test_weighting_matches_the_reference(self) -> None:
+        from foxrepro.fox.kernel import cf_shuffle_attention, cf_weight_features
+        from foxrepro.fox.reference import (
+            reference_apply_attention, reference_edit_attention,
+        )
+
+        for dtype in (torch.float32, torch.float16):
+            with self.subTest(dtype=dtype):
+                attn, feats = self._inputs(dtype)
+                torch.manual_seed(99)
+                edited = reference_edit_attention(attn, "shuffle")
+                want = reference_apply_attention(feats, edited)
+                got = cf_weight_features(
+                    feats,
+                    cf_shuffle_attention(
+                        attn, generator=torch.Generator().manual_seed(99)),
+                )
+                self.assertTrue(torch.equal(want, got))
+                self.assertEqual(got.dtype, torch.float16)
+
+    def test_shuffle_is_a_permutation_per_head(self) -> None:
+        """Not a resample: the multiset of attention values is preserved.
+
+        This is what makes the gain exactly 1/n_keys on average, which is the
+        property that makes the counterfactual branch nearly image-blind.
+        """
+        from foxrepro.fox.kernel import cf_shuffle_attention
+
+        attn, _ = self._inputs(torch.float32)
+        got = cf_shuffle_attention(
+            attn, generator=torch.Generator().manual_seed(3))
+        for h in range(attn.shape[1]):
+            with self.subTest(head=h):
+                self.assertTrue(torch.equal(
+                    attn[0, h].flatten().sort().values,
+                    got[0, h].flatten().sort().values,
+                ))
+
+    def test_the_mean_gain_is_one_over_the_key_count(self) -> None:
+        """Structural, and the reason this branch is close to "no image".
+
+        Each attention row sums to 1 over ``n_keys``, so the matrix sums to
+        ``n_keys`` and its mean entry is ``1 / n_keys``. A permutation cannot
+        change a mean, and neither resizing nor averaging over heads does. So
+        the visual features reach the negative branch scaled by a factor of
+        order ``1 / n_keys`` -- 1/577 on LLaVA-1.5.
+        """
+        from foxrepro.fox.kernel import cf_shuffle_attention, cf_weight_features
+
+        n_keys = 65
+        attn, feats = self._inputs(torch.float32, keys=n_keys)
+        ones = torch.ones_like(feats[..., :1])
+        gain = cf_weight_features(
+            ones, cf_shuffle_attention(
+                attn, generator=torch.Generator().manual_seed(3))).float()
+        self.assertAlmostEqual(gain.mean().item(), 1.0 / n_keys, places=3)
+        self.assertLess(gain.std().item(), gain.mean().item())
+
+    def test_the_generator_makes_it_reproducible(self) -> None:
+        from foxrepro.fox.kernel import cf_shuffle_attention
+
+        attn, _ = self._inputs(torch.float32)
+        a = cf_shuffle_attention(attn, generator=torch.Generator().manual_seed(4))
+        b = cf_shuffle_attention(attn, generator=torch.Generator().manual_seed(4))
+        c = cf_shuffle_attention(attn, generator=torch.Generator().manual_seed(5))
+        self.assertTrue(torch.equal(a, b))
+        self.assertFalse(torch.equal(a, c))

@@ -126,7 +126,7 @@ N_SAMPLES: Dict[Tuple[str, str], int] = {
 #: Methods that run two forward branches per token as rows of one batch.
 #: ``mode="off"`` does NOT take a method out of this set: it disables the head
 #: edit and keeps the second branch, which is the point of that control.
-DUAL_BRANCH = frozenset({"fox", "vcd", "sid", "vcd_fox_fusion"})
+DUAL_BRANCH = frozenset({"fox", "vcd", "sid", "causalmm", "vcd_fox_fusion"})
 
 #: Methods whose two branches cannot be batched, so the weights are read twice
 #: per token. ICD disturbs the instruction, so the sequences differ in length.
@@ -496,14 +496,17 @@ def _build_plan() -> List[Job]:
     # Three of the six are implemented and verified against their released
     # source (tests/test_kernel_equivalence.py, tests/test_attention_wiring.py):
     #
-    #   vcd  Leng et al. 2024   negative branch = diffusion-noised image
-    #   icd  Wang et al. 2024   negative branch = disturbed instruction
-    #   sid  Huo et al. 2025    negative branch = the model's own worst read
+    #   vcd       Leng et al. 2024   negative = diffusion-noised image
+    #   icd       Wang et al. 2024   negative = disturbed instruction
+    #   sid       Huo et al. 2025    negative = the model's own worst read
+    #   causalmm  Zhou et al. 2025   negative = shuffled CLIP attention
     #
-    # All three share one decoding rule, (1 + a) z_obs - a z_cd with the beta
-    # cutoff, and differ only in how the negative branch is built -- so a bug
-    # in the rule would move all three together and a bug in one branch would
-    # move one. That is worth more than any single row.
+    # All four share ONE decoding rule, (1 + a) z_obs - a z_cd with the beta
+    # cutoff -- CausalMM calls the coefficients gamma and epsilon, but the
+    # formula is the same term for term. They differ only in how the negative
+    # branch is built, so a bug in the rule would move all four together and
+    # a bug in one branch would move one. That is worth more than any single
+    # row, and it is not stated in any of the four papers.
     #
     # Breadth seeds, not ten. The seed-level interval on POPE-adversarial is
     # about +/-0.6 points at n=3, which is well inside the 4-10 point gaps
@@ -521,7 +524,7 @@ def _build_plan() -> List[Job]:
     # decoding rule, so a bug in it moves all three and a bug in one negative
     # branch moves one.
     for seed in SEEDS_BREADTH:
-        for method in ("vcd", "icd", "sid"):
+        for method in ("vcd", "icd", "sid", "causalmm"):
             jobs.append(Job("table1_methods", method, "pope", "adversarial",
                             seed=seed,
                             note="compared baseline, own decoding rule"))
@@ -538,6 +541,12 @@ def _build_plan() -> List[Job]:
             jobs.append(Job("table9_methods", method, bench, split,
                             decoding="greedy",
                             note="released --sample-greedy default"))
+    # CausalMM is not in that round: its harness never argmaxes the unmasked
+    # logits, so there is no greedy default to reproduce. It does run
+    # top_p=1 instead of 0.9, which is a protocol difference rather than a
+    # decoding one and is recorded in DEVIATIONS 3.13 rather than run as an
+    # arm -- changing top_p for one method would make its row the only one
+    # not comparable to the others.
 
     # ---- Tier 6: the VCD-noise arm --------------------------------------- #
     # Not VCD: VCD's noised branch inside FOX's additive fusion. It ran in

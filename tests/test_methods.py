@@ -677,26 +677,36 @@ class TestContrastiveDecoding(unittest.TestCase):
         self.assertEqual(
             m.describe()["resolved_hyperparameters"]["sid_rank"], 100)
 
-    def test_sid_refuses_to_stack_ct2s_on_an_external_perturbation(self) -> None:
-        """SID's own harness does stack them; no paper proposes it.
+    def test_stacking_two_negative_branches_is_refused(self) -> None:
+        """One method is one perturbation. Two is nobody's method.
 
-        ``--use-vcd`` leaves ``--fast-v-attention-rank`` at 100, so that row
-        is VCD+CT2S. Reproducing it under either name would misattribute the
-        result, so the combination is refused here rather than offered.
+        SID's own harness does stack two: ``--use-vcd`` leaves
+        ``--fast-v-attention-rank`` at 100, so that row is VCD+CT2S.
+        Reproducing it would file a number under a paper that did not propose
+        it, so every pair is refused rather than offered.
         """
         from foxrepro.fox.attention import fox_generate
 
-        for extra in ({"pixel_values_do": torch.zeros(1, 3, 4, 4)},
-                      {"input_ids_do": torch.zeros(1, 4, dtype=torch.long)}):
-            with self.subTest(perturbation=sorted(extra)[0]):
+        px = torch.zeros(1, 3, 4, 4)
+        ids = torch.zeros(1, 4, dtype=torch.long)
+        pairs = (
+            ("sid+vcd", {"sid": True, "pixel_values_do": px}),
+            ("sid+icd", {"sid": True, "input_ids_do": ids}),
+            ("sid+causalmm", {"sid": True, "cf_vision": True}),
+            ("causalmm+vcd", {"cf_vision": True, "pixel_values_do": px}),
+            ("causalmm+icd", {"cf_vision": True, "input_ids_do": ids}),
+            ("vcd+icd", {"pixel_values_do": px, "input_ids_do": ids}),
+        )
+        for label, extra in pairs:
+            with self.subTest(pair=label):
                 with self.assertRaises(ValueError) as cm:
                     fox_generate(
                         self.model,
                         self.processor(images=None, text="x"),
-                        max_new_tokens=1, sid=True, fusion="contrastive",
+                        max_new_tokens=1, fusion="contrastive",
                         mode="off", **extra,
                     )
-                self.assertIn("CT2S", str(cm.exception))
+                self.assertIn("perturbation", str(cm.exception))
 
     # -- the hyperparameters that multiply the gap -------------------------- #
     def test_cd_alpha_is_recorded_and_overridable(self) -> None:
@@ -724,12 +734,17 @@ class TestContrastiveDecoding(unittest.TestCase):
         If the head edit were left on, these rows would measure Fox plus a
         perturbation and the comparison table would be meaningless.
         """
-        for arm in ("vcd", "icd"):
+        for arm in ("vcd", "icd", "sid"):
             with self.subTest(arm=arm):
                 m, _ = self.run_method(arm)
                 d = m.describe()
                 self.assertEqual(d["fusion"], "contrastive")
-                self.assertEqual(d["mode"], "off")
+                self.assertEqual(d["fox_intervention"], "off")
+                self.assertEqual(d["intervention"], "none")
+                # Must NOT be called "mode": the record's own `mode` field is
+                # cfg.mode, and two keys with one name and two values is how a
+                # provenance field stops being evidence.
+                self.assertNotIn("mode", d)
 
 
 class TestUntrackedOverridesAreRefused(_Base):

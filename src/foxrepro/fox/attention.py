@@ -79,6 +79,7 @@ __all__ = [
     "load_llava",
     "locate_image_span",
     "fox_generate",
+    "causalmm_vision",
     "ATTN_NAME",
 ]
 
@@ -249,6 +250,179 @@ def _sid_read_ranking(
         probs, FOX.img_start, FOX.img_end,
         rank=FOX.sid_rank, row=FOX.sid_read_row(),
     )
+
+
+@contextlib.contextmanager
+def causalmm_vision(
+    model: Any,
+    *,
+    rows: Tuple[int, ...] = (1,),
+    edit: str = "shuffle",
+    generator: Optional[torch.Generator] = None,
+    stats: Optional[Dict[str, float]] = None,
+) -> Iterator[None]:
+    """Make ``rows`` see CausalMM's vision counterfactual, for one generate call.
+
+    ``LlavaModel.get_image_features`` is the right seam: its list is
+    ``torch.cat``-ed and ``masked_scatter``-ed into ``inputs_embeds``
+    positionally, so replacing element *i* makes batch row *i* -- and only
+    that row -- read a different image, with every other tensor and the whole
+    language model untouched.
+
+    The body re-does what the stock method does because the stock one returns
+    only the projected features, and the counterfactual needs the
+    *pre-projector* ones plus the attention. The duplication is covered by a
+    test that asserts this reconstruction is bit-identical to
+    ``get_image_features`` with attentions off, so a transformers change
+    cannot make the clean branch drift silently.
+
+    One deviation that cannot be avoided and must be read with the result:
+    ``output_attentions=True`` puts CLIP on its eager path, and that changes
+    the hidden states -- measured at max|diff| 3.9e-3 in fp16 on a small
+    stand-in. So this arm's CLEAN branch is not bit-identical to the clean
+    branch of every other arm in this repo. That is faithful to CausalMM,
+    which always passes the flag and derives both branches from the one
+    forward; it is recorded because this project's own finding is that a
+    last-bits fp16 difference in attention moved POPE by 2.8 points, so
+    "the last bits do not matter" is exactly the assumption not to make here.
+    """
+    from foxrepro.fox.kernel import cf_shuffle_attention, cf_weight_features
+
+    inner = model.model
+    orig = inner.get_image_features
+    cfg = model.config
+
+    def wrapped(pixel_values, vision_feature_layer=None,
+                vision_feature_select_strategy=None, **kw):  # noqa: ANN001
+        layer = (vision_feature_layer if vision_feature_layer is not None
+                 else cfg.vision_feature_layer)
+        strategy = (vision_feature_select_strategy
+                    if vision_feature_select_strategy is not None
+                    else cfg.vision_feature_select_strategy)
+        if not isinstance(layer, int):
+            raise ValueError(
+                f"CausalMM reads one vision layer ({layer!r} is a pool); the "
+                "released code indexes hidden_states and attentions with the "
+                "same scalar mm_vision_select_layer"
+            )
+        if strategy != "default":
+            raise ValueError(
+                f"CausalMM drops the CLS token (features[:, 1:]), which is "
+                f"vision_feature_select_strategy='default', not {strategy!r}"
+            )
+        if kw.get("image_sizes") is not None:
+            raise ValueError(
+                "CausalMM is a LLaVA-1.5 method: fixed 336x336, one tile. "
+                "image_sizes means an anyres backbone, where the 24x24 "
+                "feature grid this assumes does not hold"
+            )
+        n = int(pixel_values.shape[0])
+        if n > 1 and not all(
+            torch.equal(pixel_values[0], pixel_values[i]) for i in range(1, n)
+        ):
+            raise ValueError(
+                "the batch rows do not share one image, so running the vision "
+                "tower once and reusing it would be wrong. CausalMM's "
+                "counterfactual is built from the SAME image as the clean "
+                "branch; a differing row means some other perturbation is "
+                "also active"
+            )
+        # One row, not n: the rows are identical, and the attentions are
+        # [1, 24, 577, 577] per layer x 24 layers ~ 384 MB in fp16 -- doubling
+        # that on a T4 that already holds 13 GB of weights is not free.
+        with _eager_vision_tower(inner.vision_tower):
+            outs = inner.vision_tower(
+                pixel_values[:1], output_hidden_states=True,
+                output_attentions=True)
+        selected = outs.hidden_states[layer][:, 1:]
+        attn = outs.attentions[layer] if outs.attentions is not None else None
+        if attn is None:
+            raise RuntimeError(
+                "the vision tower returned no attentions, so the "
+                "counterfactual cannot be built. On transformers >= ~4.52 "
+                "output_attentions=True no longer falls back to eager -- it "
+                "warns and returns None -- so the eager switch above is "
+                "mandatory and did not take effect."
+            )
+        edited = (cf_shuffle_attention(attn, generator=generator)
+                  if edit == "shuffle" else _cf_edit_other(attn, edit))
+        weighted = cf_weight_features(selected, edited).to(selected.dtype)
+        if stats is not None:
+            gain = cf_weight_features(
+                torch.ones_like(selected[..., :1]), edited).float()
+            stats["cf_gain_mean"] = float(gain.mean())
+            stats["cf_gain_std"] = float(gain.std())
+        clean = inner.multi_modal_projector(selected)[0]
+        cf = inner.multi_modal_projector(weighted)[0]
+        out = [clean] * n
+        for r in rows:
+            if r >= n:
+                raise ValueError(
+                    f"counterfactual row {r} but the batch has {n} rows")
+            out[r] = cf
+        return out
+
+    # Patch the INSTANCE, and on the way out remove the instance attribute
+    # rather than assigning the old bound method back: leaving an attribute
+    # that shadows the class method would survive this context for the rest
+    # of the process, so a later arm would still be running through it.
+    had_own = "get_image_features" in vars(inner)
+    inner.get_image_features = wrapped
+    try:
+        yield
+    finally:
+        if had_own:  # pragma: no cover - nothing else patches this today
+            inner.get_image_features = orig
+        else:
+            del inner.get_image_features
+
+
+@contextlib.contextmanager
+def _eager_vision_tower(tower: Any) -> Iterator[None]:
+    """Put the vision tower on eager attention, then put it back.
+
+    Required, not an optimisation. CausalMM was written against transformers
+    4.31.0, where ``output_attentions=True`` silently fell back to eager. From
+    ~4.52 onward it does not: ``sdpa_attention_forward`` warns once and
+    returns ``None`` for the weights, so a direct port gets ``attentions=None``
+    and builds a counterfactual out of nothing.
+
+    This is also why CausalMM's clean branch cannot be bit-identical to the
+    other arms': eager is what the method requires, and eager CLIP does not
+    agree with SDPA CLIP in the last bits.
+    """
+    setter = getattr(tower, "set_attn_implementation", None)
+    cfg = getattr(tower, "config", None)
+    previous = getattr(cfg, "_attn_implementation", None) if cfg else None
+    if setter is not None:
+        setter("eager")
+    elif cfg is not None:  # pragma: no cover - older transformers
+        cfg._attn_implementation = "eager"
+    else:  # pragma: no cover - not a transformers module
+        raise RuntimeError(
+            "cannot switch the vision tower to eager attention, so "
+            "output_attentions would come back None"
+        )
+    try:
+        yield
+    finally:
+        if previous is not None:
+            if setter is not None:
+                setter(previous)
+            elif cfg is not None:  # pragma: no cover
+                cfg._attn_implementation = previous
+
+
+def _cf_edit_other(attn: torch.Tensor, edit: str) -> torch.Tensor:
+    """The three non-default edits, which are the paper's ablation.
+
+    Unreachable from the released code -- ``edit_attention``'s default is
+    ``shuffle`` and the call site passes nothing -- so they are implemented
+    straight from the reference rather than given their own kernel.
+    """
+    from foxrepro.fox.reference import reference_edit_attention
+
+    return reference_edit_attention(attn, edit)
 
 
 def fox_attention_forward(
@@ -688,6 +862,8 @@ def fox_generate(
     sid: bool = False,
     sid_agg_layer: int = 2,
     sid_rank: int = 100,
+    cf_vision: bool = False,
+    cf_edit: str = "shuffle",
 ) -> Dict[str, Any]:
     """Generate with Fox: both branches batched, fused per token.
 
@@ -724,6 +900,10 @@ def fox_generate(
       visible from layer ``sid_agg_layer`` onward. SID perturbs nothing
       outside the model, which is why its negative branch costs one forward
       and no preprocessing.
+    * ``cf_vision`` -- the same image, re-weighted per visual token by a
+      shuffled CLIP attention map before the projector. CausalMM. The
+      language model is untouched; only what row 1 reads as the image
+      changes. See :func:`causalmm_vision`.
 
     When ``input_ids_do`` is given the two branches cannot be batched: their
     sequences differ in length and content, so position ids and the cache
@@ -753,21 +933,25 @@ def fox_generate(
         raise ValueError(
             f"fusion must be 'fox_additive' or 'contrastive', got {fusion!r}"
         )
-    if input_ids_do is not None and pixel_values_do is not None:
-        raise ValueError(
-            "input_ids_do and pixel_values_do perturb different things; "
-            "running both at once is not any published method"
-        )
-    if sid and (input_ids_do is not None or pixel_values_do is not None):
-        # SID's own repo *does* stack these: `--use-vcd` leaves
+    n_perturbations = sum((
+        input_ids_do is not None, pixel_values_do is not None, bool(sid),
+        bool(cf_vision),
+    ))
+    if n_perturbations > 1:
+        # SID's own harness DOES stack two of these: `--use-vcd` leaves
         # --fast-v-attention-rank at 100, so its VCD row is VCD+CT2S
-        # (vcd_sample.py:141, reached for any images_cd). That is a bug in
-        # the harness, not a method, and reproducing it under the name of
-        # either paper would misattribute whatever it measures.
+        # (vcd_sample.py:141, reached for any images_cd). That is a defect in
+        # the harness, not a method, and a number from it would be
+        # misattributed to whichever paper it was filed under.
         raise ValueError(
-            "sid=True with an external perturbation stacks CT2S on top of "
-            "VCD or ICD. No paper proposes that; run them separately"
+            f"{n_perturbations} negative-branch perturbations are active at "
+            "once (of input_ids_do, pixel_values_do, sid/CT2S, cf_vision). "
+            "Each compared method is exactly one of them; stacking any two "
+            "is not a published method and the result belongs to neither"
         )
+    if cf_vision and single_branch:
+        raise ValueError(
+            "cf_vision=True needs the negative branch; not single_branch")
     if sid and single_branch:
         raise ValueError("sid=True needs the negative branch; not single_branch")
     if sid and sid_agg_layer < 1:
@@ -823,6 +1007,17 @@ def fox_generate(
     cache = None
     cache_do = None
 
+    # Populated by causalmm_vision; empty otherwise. Recorded so a run whose
+    # counterfactual gain collapsed to ~0 (i.e. the negative branch is
+    # reading a blanked image rather than a reshuffled one) is visible in the
+    # record instead of only in the score.
+    cf_stats: Dict[str, float] = {}
+    cf_ctx: Any = (
+        causalmm_vision(model, rows=(1,), edit=cf_edit, generator=gen,
+                        stats=cf_stats)
+        if cf_vision else contextlib.nullcontext()
+    )
+
     with FOX.configured(
         enabled=not single_branch, mode=mode, gamma=gamma, ratio=ratio,
         logit_dtype=logit_dtype, softmax_dtype=softmax_dtype,
@@ -833,7 +1028,7 @@ def fox_generate(
         sid_enabled=sid, sid_agg_layer=sid_agg_layer, sid_rank=sid_rank,
         sid_rows=torch.tensor([1], device=device) if sid else None,
         sid_keep=None,
-    ):
+    ), cf_ctx:
         for step in range(max_new_tokens):
             FOX.reset_diagnostics()
             # The released code recomputes the keep-set from the current last
@@ -950,4 +1145,6 @@ def fox_generate(
         result["trace"] = trace
     if sid:
         result["sid_n_kept"] = sid_kept
+    if cf_stats:
+        result.update(cf_stats)
     return result

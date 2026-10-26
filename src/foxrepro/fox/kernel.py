@@ -44,6 +44,7 @@ import math
 from typing import Any, Dict, Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 
 __all__ = [
     "TORCH_DTYPES",
@@ -59,6 +60,8 @@ __all__ = [
     "add_diffusion_noise",
     "ct2s_keep",
     "ct2s_dropped_keys",
+    "cf_shuffle_attention",
+    "cf_weight_features",
 ]
 
 #: Canonical dtype spelling -> torch dtype. ``"native"`` is resolved against
@@ -554,3 +557,56 @@ def ct2s_dropped_keys(
         k = keep[keep <= hi]
         drop[k] = False
     return drop
+
+
+# --------------------------------------------------------------------------- #
+# CausalMM: the vision counterfactual
+# --------------------------------------------------------------------------- #
+def cf_shuffle_attention(
+    attn: torch.Tensor, *, generator: Optional[torch.Generator] = None
+) -> torch.Tensor:
+    """Permute each head's attention entries, independently per head.
+
+    ``attn`` is ``[B, H, X, Y]``. The permutation is over ``X * Y`` and is
+    shared across the batch within a head, which is what the released
+    ``gather(1, perm.expand(batch, -1))`` does.
+
+    The generator is this repo's addition: the released code calls
+    ``torch.randperm`` with no generator, so the counterfactual is drawn from
+    global RNG and the one component whose purpose is randomness does not
+    repeat per sample in a seeded run. Same deviation, same reason, as
+    :func:`add_diffusion_noise`.
+
+    Asserted equal to ``reference.reference_edit_attention(..., 'shuffle')``.
+    """
+    out = attn.clone()
+    b, h, x, y = attn.shape
+    for i in range(h):
+        perm = torch.randperm(x * y, device=attn.device, generator=generator)
+        out[:, i] = out[:, i].view(b, -1).gather(
+            1, perm.expand(b, -1)).view(b, x, y)
+    return out
+
+
+def cf_weight_features(
+    features: torch.Tensor, attn: torch.Tensor
+) -> torch.Tensor:
+    """Rescale each visual token by a head-averaged, resized attention value.
+
+    ``features`` is ``[B, N, D]`` with ``N`` a square (576 on LLaVA-1.5) and
+    is the **pre-projector** feature, matching the released order: weight
+    first, project after. The projector is a two-layer GELU MLP, so the two
+    orders are not the same transform.
+
+    The dtype sequence is the released one and is load-bearing: interpolate
+    and mean run in ``attn``'s dtype, the multiply in ``features``' dtype,
+    and the result is cast to fp16 unconditionally.
+
+    Asserted equal to ``reference.reference_apply_attention``.
+    """
+    n = int(math.sqrt(features.shape[1]))
+    resized = F.interpolate(attn, size=(n, n), mode="bilinear",
+                            align_corners=False)
+    avg = torch.mean(resized, dim=1)
+    avg = avg.view(avg.size(0), -1, 1).expand(-1, -1, features.shape[-1])
+    return (features * avg).to(torch.float16)

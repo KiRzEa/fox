@@ -780,3 +780,161 @@ def reference_ct2s_attention_mask(
     gen_attention_mask[:, sys_length:sys_length + image_token_length] = False
     gen_attention_mask[:, top_attention_rank_index] = True
     return gen_attention_mask
+
+
+# --------------------------------------------------------------------------- #
+# CausalMM -- the vision counterfactual
+# --------------------------------------------------------------------------- #
+# Transcribed from The-Martyr/CausalMM,
+# ``llava-1.5/experiments/llava/model/multimodal_encoder/cf_encoder.py`` and
+# ``causalmm_cf/causalmm_sm.py``.
+#
+# Two facts about this release decide what "reproducing CausalMM" means:
+#
+# 1. The POPE script imports ``causalmm_sm``, the SINGLE-counterfactual
+#    sampler, and its rule is the one VCD, ICD and SID already share --
+#    ``(1 + gamma) z_obs - gamma z_cf`` with ``log(epsilon)`` as the cutoff.
+#    ``gamma`` sits in ``cd_alpha``'s slot and ``epsilon`` in ``cd_beta``'s.
+#    So four of the five compared methods are one formula and differ only in
+#    how the negative branch is built.
+#
+# 2. ``causalmm_mm.py``, the two-counterfactual version
+#    (``(1 + 2g) z_obs - g z_cf_v - g z_cf_l``), is dead code in this
+#    release: it unpacks a 3-tuple from a forward that returns 2, and no
+#    shipped model provides a third output. The published POPE numbers are
+#    the single-branch version.
+#
+# Defaults: ``llava1.5_eval.bash`` passes ``gamma=1.0`` and ``epsilon=0.6``,
+# overriding the ``0.5`` / ``0.1`` in the sampler. The eval script runs
+# ``do_sample=True, temperature=1.0, top_p=1, max_new_tokens=1024, seed=55``
+# -- note ``top_p=1``, i.e. no nucleus truncation at all, against 0.9
+# everywhere else in this comparison.
+
+CAUSALMM_GAMMA = 1.0          # llava1.5_eval.bash; the sampler default is 0.5
+CAUSALMM_EPSILON = 0.6        # ditto; the sampler default is 0.1
+CAUSALMM_EDIT_METHOD = "shuffle"   # cf_encoder.edit_attention's own default
+
+
+def reference_edit_attention(attention_maps, method: str = "shuffle"):
+    """``cf_encoder.py:50-73``, verbatim.
+
+    ``attention_maps`` is whatever ``get_attentions`` returned. On LLaVA that
+    is CLIP's ``[B, H, 577, 577]`` attention **matrix**, not a spatial map --
+    see :func:`reference_get_attentions` for why the reshape that would have
+    made it one does not fire.
+
+    Only ``"shuffle"`` is reachable from the shipped code: it is the default
+    of this function and the call site passes nothing. The other three are
+    the paper's ablation and are kept here because the paper reports them.
+
+    ``torch.randperm`` is called without a generator, so the counterfactual
+    is drawn from global RNG -- the one component whose entire purpose is
+    randomness is the part of a seeded run that does not repeat per sample.
+    Same defect as VCD's noise (:func:`reference_add_diffusion_noise`).
+    """
+    import random  # noqa: F401  (unused; kept to mirror the file's imports)
+
+    batch_size, num_heads, height, width = attention_maps.shape
+
+    if method == 'random':
+        edited_attention_maps = torch.rand(
+            batch_size, num_heads, height, width,
+            device=attention_maps.device) * 2
+
+    elif method == 'uniform':
+        avg_value = torch.mean(attention_maps, dim=(2, 3), keepdim=True)
+        edited_attention_maps = avg_value.expand(
+            batch_size, num_heads, height, width)
+
+    elif method == 'reversed':
+        max_value_height, _ = torch.max(attention_maps, dim=2, keepdim=True)
+        max_value, _ = torch.max(max_value_height, dim=3, keepdim=True)
+
+        edited_attention_maps = max_value - attention_maps
+
+    elif method == 'shuffle':
+        edited_attention_maps = attention_maps.clone()
+        for i in range(num_heads):
+            edited_attention_maps[:, i] = edited_attention_maps[:, i].view(
+                batch_size, -1).gather(
+                    1,
+                    torch.randperm(height * width,
+                                   device=attention_maps.device).expand(
+                                       batch_size, -1)).view(
+                                           batch_size, height, width)
+
+    else:
+        raise ValueError(
+            "Invalid method. Choose from "
+            "['random', 'uniform', 'reversed', 'shuffle']")
+
+    return edited_attention_maps
+
+
+def reference_get_attentions(image_forward_outs):
+    """``cf_encoder.py:76-94``, verbatim -- including the branch that never fires.
+
+    The reshape to a square grid is guarded by ``len(attentions[0].shape) == 3``.
+    CLIP's attentions are ``[B, H, 577, 577]``, which is 4-D, so the guard is
+    false and ``attention_maps`` stays the full attention **matrix**. What
+    :func:`reference_apply_attention` then bilinearly resizes to 24x24 is
+    therefore a 577x577 matrix, not the spatial attention map the paper's
+    figures show. This is transcribed rather than corrected because it is
+    what produced the published numbers.
+    """
+    attentions = image_forward_outs.attentions
+
+    # (batch_size, num_heads, seq_length)
+    if len(attentions[0].shape) == 3:
+        seq_length = attentions[0].shape[-1]
+        grid_size = int(seq_length ** 0.5)  # Assuming it's a square grid
+        attentions = [
+            attn.view(attn.shape[0], attn.shape[1], grid_size, grid_size)
+            for attn in attentions
+        ]
+
+    return attentions
+
+
+def reference_apply_attention(image_features, attention_maps):
+    """``cf_encoder.py:96-121``, verbatim.
+
+    Resize to the feature grid, average over heads, broadcast along the
+    hidden dimension and multiply. So the counterfactual branch sees the
+    image features rescaled per visual token by a shuffled attention value
+    -- a per-token gain, not a different image.
+
+    The multiply happens on the **pre-projector** features
+    (``llava_arch_cf.py`` projects ``weighted_features`` afterwards). The
+    projector is a two-layer GELU MLP, so scaling before it is not the same
+    as scaling after.
+
+    The ``torch.float16`` cast at the end is unconditional, which is why this
+    is kept verbatim: it pins the dtype of the counterfactual branch's
+    features regardless of what the rest of the model is running in.
+    """
+    import math
+
+    import torch.nn.functional as F
+
+    # Resize
+    height_img, width_img = (int(math.sqrt(image_features.shape[1])),
+                             int(math.sqrt(image_features.shape[1])))
+    attention_maps_resized = F.interpolate(
+        attention_maps, size=(height_img, width_img), mode='bilinear',
+        align_corners=False)
+
+    # Average over all attention heads to get a single attention map
+    averaged_attention_map = torch.mean(attention_maps_resized, dim=1)
+
+    # match the features dimension
+    averaged_attention_map = averaged_attention_map.view(
+        averaged_attention_map.size(0), -1, 1)
+    averaged_attention_map = averaged_attention_map.expand(
+        -1, -1, image_features.shape[-1])
+
+    # Apply attention map to image features
+    weighted_features = image_features * averaged_attention_map
+    weighted_features = weighted_features.to(torch.float16)
+
+    return weighted_features

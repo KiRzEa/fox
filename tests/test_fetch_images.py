@@ -314,3 +314,59 @@ class TestDiskProbe(unittest.TestCase):
         d = self._probe("some/unlisted-model")
         self.assertGreater(d["checkpoint_download_gib"], 0)
         self.assertIn(d["status"], ("PASS", "WARN", "FAIL"))
+
+    def test_the_gpu_check_follows_the_model_id_too(self) -> None:
+        """A probe that passes for the wrong model is worse than no probe.
+
+        --model-id was added for the disk check first, and check_gpus kept
+        using LLaVA's VRAM figures whatever was named -- so probing for
+        InstructBLIP would have reported a margin computed for a different
+        checkpoint.
+        """
+        import json as _json
+        import subprocess
+        import sys as _sys
+
+        import torch
+
+        from foxrepro.storage import paths
+
+        if not torch.cuda.is_available():
+            self.skipTest("the gpus check only runs with CUDA present")
+
+        def gpus(model_id):
+            proc = subprocess.run(
+                [_sys.executable,
+                 str(paths().repo_root / "scripts" / "probe_host.py"),
+                 "--json", "--model-id", model_id],
+                capture_output=True, text=True, timeout=600,
+            )
+            doc = _json.loads(proc.stdout)
+            return next(c for c in doc["checks"] if c["check"] == "gpus")
+
+        small = gpus("llava-hf/llava-1.5-7b-hf")
+        large = gpus("Salesforce/instructblip-vicuna-7b")
+        self.assertGreater(large["weights_gib_fp16"], small["weights_gib_fp16"])
+        self.assertGreater(large["est_per_gpu_need_gib"],
+                           small["est_per_gpu_need_gib"])
+        self.assertFalse(large["memory_model_estimated"])
+
+    def test_an_unlisted_model_says_its_vram_figures_are_borrowed(self) -> None:
+        from foxrepro.bench import report  # noqa: F401  (keeps import style)
+
+        import importlib.util
+        import sys as _sys
+
+        from foxrepro.storage import paths
+
+        spec = importlib.util.spec_from_file_location(
+            "_probe", paths().repo_root / "scripts" / "probe_host.py")
+        mod = importlib.util.module_from_spec(spec)
+        _sys.modules["_probe"] = mod
+        spec.loader.exec_module(mod)
+
+        known = mod._memory_model("llava-hf/llava-1.5-7b-hf")
+        guess = mod._memory_model("some/unlisted-model")
+        self.assertFalse(known["estimated"])
+        self.assertTrue(guess["estimated"])
+        self.assertEqual(guess["weights_fp16"], known["weights_fp16"])

@@ -42,6 +42,34 @@ WEIGHTS_GIB_FP16 = 13.16
 KV_GIB_FP16_2BRANCH = 1.09
 OVERHEAD_GIB = 1.2  # CUDA context + allocator slack + eager transient
 
+#: Per-checkpoint VRAM model, so ``--model-id`` means the same thing to the
+#: GPU check as it does to the disk check. Without this the GPU estimate
+#: silently stayed LLaVA's whichever checkpoint was named -- a probe that
+#: passes for the wrong model is worse than no probe.
+#:
+#: InstructBLIP's weights are the awkward entry: 29.5 GiB of fp32 safetensors
+#: is ~7.9e9 parameters, so ~14.8 GiB at fp16, plus a ViT-g vision tower and a
+#: Q-Former that LLaVA has no counterpart for. Its visual stream is 32
+#: Q-Former query tokens rather than 576 patch tokens, so the KV cache is
+#: smaller even though the weights are larger.
+MODEL_MEMORY_GIB = {
+    "llava-hf/llava-1.5-7b-hf": {
+        "weights_fp16": 13.16, "kv_fp16_2branch": 1.09,
+    },
+    "Salesforce/instructblip-vicuna-7b": {
+        "weights_fp16": 15.80, "kv_fp16_2branch": 0.55,
+    },
+}
+
+
+def _memory_model(model_id: str) -> dict:
+    """VRAM figures for ``model_id``, falling back to LLaVA's with a note."""
+    known = MODEL_MEMORY_GIB.get(model_id)
+    if known:
+        return {**known, "estimated": False}
+    return {"weights_fp16": WEIGHTS_GIB_FP16,
+            "kv_fp16_2branch": KV_GIB_FP16_2BRANCH, "estimated": True}
+
 
 def _status(ok: bool, warn: bool = False) -> str:
     return "WARN" if warn else ("PASS" if ok else "FAIL")
@@ -196,7 +224,7 @@ def check_torch() -> dict:
     }
 
 
-def check_gpus() -> dict:
+def check_gpus(model_id: str = "llava-hf/llava-1.5-7b-hf") -> dict:
     import torch
 
     if not torch.cuda.is_available():
@@ -220,11 +248,15 @@ def check_gpus() -> dict:
     smallest = min(d["total_gib"] for d in devices)
 
     # Sharding by layer splits weights and KV cache evenly; overhead is per-GPU.
-    per_gpu_need = (WEIGHTS_GIB_FP16 + KV_GIB_FP16_2BRANCH) / n + OVERHEAD_GIB
+    mem = _memory_model(model_id)
+    per_gpu_need = (mem["weights_fp16"] + mem["kv_fp16_2branch"]) / n + OVERHEAD_GIB
     fits = per_gpu_need < smallest * 0.95
 
     return {
         "check": "gpus",
+        "model_id": model_id,
+        "weights_gib_fp16": mem["weights_fp16"],
+        "memory_model_estimated": mem["estimated"],
         "count": n,
         "devices": devices,
         "total_gib": round(total, 2),
@@ -233,9 +265,12 @@ def check_gpus() -> dict:
         "fits_sharded": fits,
         "status": _status(fits),
         "note": (
-            f"{n} GPU(s). Estimated {per_gpu_need:.1f} GiB needed per GPU when "
-            f"sharded with device_map='auto', against {smallest:.1f} GiB "
-            f"available on the smallest. "
+            f"{n} GPU(s). {model_id} needs an estimated "
+            f"{per_gpu_need:.1f} GiB per GPU when sharded with "
+            f"device_map='auto', against {smallest:.1f} GiB on the smallest. "
+            + ("No VRAM figures are recorded for this checkpoint, so LLaVA's "
+               "are used -- treat the margin with suspicion. " if mem["estimated"]
+               else "")
             + (
                 "Fits with headroom."
                 if fits
@@ -556,7 +591,8 @@ def main() -> int:
     checks.append(check_preinstalled_stack())
     checks.append(check_disk(args.model_id))
     if cuda:
-        checks += [check_gpus(), check_dtypes(), check_ulp(), check_tf32()]
+        checks += [check_gpus(args.model_id), check_dtypes(),
+                   check_ulp(), check_tf32()]
 
     fails = [c for c in checks if c["status"] == "FAIL"]
     warns = [c for c in checks if c["status"] == "WARN"]

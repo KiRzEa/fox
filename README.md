@@ -8,6 +8,11 @@ Target host: **Kaggle Notebooks, 2× Tesla T4 16 GB**.
 
 ---
 
+> **Quay lại sau một thời gian, hoặc mới nhận dự án?**
+> Đọc [`docs/CATCHUP.md`](docs/CATCHUP.md) trước — nó giải thích mọi thuật ngữ
+> (Fox, POPE, CHAIR, ULP, TOST…), tóm tắt đã chạy gì và biết được gì, và liệt
+> kê những lần đã sai để không lặp lại.
+
 ## What the paper claims
 
 Large Vision-Language Models hallucinate objects that are not in the image. The

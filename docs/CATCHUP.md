@@ -21,6 +21,27 @@ Hai câu hỏi, theo thứ tự:
 
 Câu 1 đã trả lời xong phần lớn. Câu 2 là nơi kết quả thú vị nằm.
 
+### Phạm vi: chỉ LLaVA-1.5, trên POPE và CHAIR
+
+Paper chạy trên **ba** backbone (LLaVA-1.5, InstructBLIP, Shikra), bốn
+benchmark (POPE, CHAIR, MME, + GPT-4V judge), và so với **sáu** phương pháp
+khác. Repo này chỉ phủ **cột LLaVA-1.5 trên POPE và CHAIR**. Nêu rõ ở đây để
+không ai hiểu nhầm là đã tái lập toàn bộ paper.
+
+Lý do bỏ qua, không phải vì lười mà vì từng cái có rào cản riêng:
+
+| bỏ qua | vì sao |
+|---|---|
+| **InstructBLIP** | Nó chạy **bản copy thứ hai** của can thiệp (`minigpt4/models/modeling_llama.py`), bản này **bỏ hẳn `m_sys`** khỏi Eq. 4 và dùng layer 4–10, k=0.4. Đó là **một phương pháp khác**, không phải đổi backbone. Paper không nói bảng nào do bản nào sinh ra |
+| **Shikra** | Không có bản HF conversion được bảo trì; release xác định vùng ảnh bằng số ma thuật `img_s == 33 and img_e == 290` |
+| **MME** | Release **không ship script MME nào** dù có báo cáo kết quả MME |
+| **GPT-4V judge** | API trả phí |
+| **ICD / SID / OPERA / CausalMM** | Xem [`DEVIATIONS.md`](DEVIATIONS.md) — chỉ VCD-noise chạy được, và nó **không phải VCD thật** |
+
+Hệ quả cần nhớ khi viết: mọi kết luận của dự án này là về **LLaVA-1.5**.
+Chúng mạnh ở đó (10 seed, TOST, Holm), nhưng **không** tự động áp cho hai
+backbone kia — nhất là InstructBLIP, nơi công thức chấm điểm head đã khác.
+
 ---
 
 ## 2. Từ điển thuật ngữ

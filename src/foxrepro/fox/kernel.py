@@ -41,7 +41,7 @@ would stop this being a reproduction:
 from __future__ import annotations
 
 import math
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 
@@ -57,6 +57,8 @@ __all__ = [
     "fuse",
     "contrastive_fuse",
     "add_diffusion_noise",
+    "ct2s_keep",
+    "ct2s_dropped_keys",
 ]
 
 #: Canonical dtype spelling -> torch dtype. ``"native"`` is resolved against
@@ -496,3 +498,59 @@ def fuse(
     cutoff = math.log(beta) + obs_logits.max(dim=-1, keepdim=True).values
     masked = fused.masked_fill(obs_logits < cutoff, -float("inf"))
     return fused, masked, lam.reshape(-1)
+
+
+# --------------------------------------------------------------------------- #
+# SID: CT2S vision-token selection
+# --------------------------------------------------------------------------- #
+def ct2s_keep(
+    probs: torch.Tensor,
+    img_start: int,
+    img_end: int,
+    *,
+    rank: int = 100,
+    row: int = 0,
+) -> torch.Tensor:
+    """The vision keys SID's negative branch keeps: the LEAST attended ones.
+
+    ``probs`` is ``[B, H, Q, K]`` post-softmax attention from layer
+    ``agg_layer - 1``, in the model dtype -- the released mean over heads runs
+    in fp16, and averaging in fp32 instead would reorder near-ties and change
+    which tokens survive.
+
+    Returns absolute key positions, sorted by attention rather than by
+    position; ``ct2s_dropped_keys`` does not care about the order.
+
+    Asserted equal to ``reference.reference_ct2s_keep_indices``.
+    """
+    avg = torch.mean(probs, dim=1)[row]          # over heads, then one row
+    last = avg[-1]                               # the last query position
+    img = last[img_start:img_end + 1]
+    k = min(int(rank), int(img.shape[0]))
+    return img.topk(k, largest=False).indices + img_start
+
+
+def ct2s_dropped_keys(
+    keep: Optional[torch.Tensor],
+    img_start: int,
+    img_end: int,
+    n_keys: int,
+    device: Any = None,
+) -> torch.Tensor:
+    """Boolean ``[n_keys]``: True where a vision key must be unattendable.
+
+    The released code builds the complement -- all ones, image span off, keep
+    set back on (``reference_ct2s_attention_mask``) -- which is the same set.
+    This form is returned instead because it is what gets added to an
+    additive attention mask, and because it stays correct when ``n_keys``
+    grows past ``img_end`` during decode.
+    """
+    drop = torch.zeros(n_keys, dtype=torch.bool, device=device)
+    hi = min(int(img_end), n_keys - 1)
+    if hi < img_start:
+        return drop
+    drop[img_start:hi + 1] = True
+    if keep is not None and keep.numel():
+        k = keep[keep <= hi]
+        drop[k] = False
+    return drop

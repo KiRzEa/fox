@@ -665,3 +665,118 @@ def reference_add_diffusion_noise(
     image_tensor_cd = q_x(noisy_image, noise_step)
 
     return image_tensor_cd
+
+
+# --------------------------------------------------------------------------- #
+# SID -- CT2S, the vision-token selection on the negative branch
+# --------------------------------------------------------------------------- #
+# Transcribed from huofushuo/SID, ``minigpt4/models/modeling_llama.py``, the
+# ``elif USE_FAST_V:`` branch of ``LlamaModel.forward`` (the mask
+# implementation; ``fast_v_inplace`` defaults to False and its sibling branch
+# physically drops tokens, which the file itself marks "KV-Cache not
+# supported").
+#
+# The defaults come from ``pope_eval.py:86-98``:
+#
+#   --use-cd                 True    the negative branch exists
+#   --use-vcd                False   and is NOT a noised image
+#   --use-icd                False   and NOT a disturbed instruction
+#   --use-fast-v             True    it is CT2S
+#   --fast-v-inplace         False   via the attention mask
+#   --fast-v-attention-rank  100     keep 100 of 576 vision tokens
+#   --fast-v-agg-layer       2       from layer 2 onward
+#   --sample-greedy          True
+#
+# Three things about this are easy to get wrong, and all three change the
+# number:
+#
+# 1. ``largest=False``. The kept tokens are the ones the last query attends
+#    to LEAST. The ``largest=True`` line is still there, commented out, one
+#    line above (``modeling_llama.py:618-619``) -- that is FastV, which keeps
+#    the most-attended tokens to save compute. SID inverts it: the negative
+#    branch is made to read the image badly on purpose. Keeping the top-100
+#    instead would build a *better* branch and the contrast would subtract
+#    the wrong thing.
+#
+# 2. The ranking is read from layer ``AGG_LAYER - 1``, not ``AGG_LAYER``.
+#    ``last_layer_attention = layer_outputs[1]`` is the previous loop
+#    iteration's output, i.e. layer 1's attention, and the mask it produces is
+#    applied from layer 2 onward.
+#
+# 3. The negative branch sees the SAME image. ``pope_eval.py:302`` sets
+#    ``image_cd = image`` when ``--use-cd`` (the default) -- no noise, no
+#    prompt change. CT2S is the entire perturbation. That is what makes SID
+#    "self-introspective" and what makes it cheap.
+#
+# The clean branch runs with ``use_fast_v = False`` and ``key_position=None``
+# (``vcd_sample.py:110-120``), so it is the unmodified model; CT2S is switched
+# on only for the negative forward (``vcd_sample.py:141-143``).
+
+#: ``--fast-v-agg-layer``. The mask applies from this layer onward and the
+#: ranking is read from the layer below it.
+SID_AGG_LAYER = 2
+
+#: ``--fast-v-attention-rank``: how many vision tokens survive, out of 576.
+SID_ATTENTION_RANK = 100
+
+#: ``--fast-v-attention-rank-add``. Dead code: only the ``vad=True`` branch
+#: reads it, and the forward that would pass ``vad=True`` is commented out at
+#: ``vcd_sample.py:157-166``. Recorded so the next reader does not have to
+#: re-derive that it never runs.
+SID_ATTENTION_RANK_ADD = 100
+
+
+def reference_ct2s_keep_indices(
+    last_layer_attention,
+    sys_length: int,
+    image_token_length: int,
+    attention_rank: int = SID_ATTENTION_RANK,
+):
+    """``modeling_llama.py:652-661``, verbatim down to the variable names.
+
+    ``last_layer_attention`` is ``[B, H, Q, K]`` post-softmax attention from
+    layer ``AGG_LAYER - 1``, in the model dtype -- the mean over heads is
+    taken in fp16 in the released code, not fp32.
+
+    ``sys_length`` is ``key_position['image_start']`` and
+    ``image_token_length`` is ``image_end - image_start + 1``, both built in
+    ``llava.py:260-265``.
+    """
+    # compute average attention over different head
+    last_layer_attention_avg = torch.mean(last_layer_attention, dim=1)[0]
+    # generate new attention mask based on the average attention, sample the
+    # top ATTENTION_RANK tokens with highest attention
+    last_layer_attention_avg_last_tok = last_layer_attention_avg[-1]
+    # get the attention in image token
+    last_layer_attention_avg_last_tok_image = last_layer_attention_avg_last_tok[
+        sys_length:sys_length + image_token_length
+    ]
+    # get the indexs of the top ATTENTION_RANK tokens
+    top_attention_rank_index = last_layer_attention_avg_last_tok_image.topk(
+        attention_rank, largest=False
+    ).indices + sys_length
+    return top_attention_rank_index
+
+
+def reference_ct2s_attention_mask(
+    batch_size: int,
+    seq_length_with_past: int,
+    sys_length: int,
+    image_token_length: int,
+    top_attention_rank_index,
+    device=None,
+):
+    """``modeling_llama.py:663-666``, verbatim.
+
+    Note the order: the whole image span is switched off and only then are
+    the kept indices switched back on. Every vision key outside the keep-set
+    is unattendable for every query, at every layer from ``AGG_LAYER``
+    onward -- it is a *key* mask, so nothing is removed, position ids are
+    untouched and the KV cache keeps its full length.
+    """
+    gen_attention_mask = torch.ones(
+        (batch_size, seq_length_with_past), dtype=torch.bool, device=device
+    )
+    gen_attention_mask[:, sys_length:sys_length + image_token_length] = False
+    gen_attention_mask[:, top_attention_rank_index] = True
+    return gen_attention_mask

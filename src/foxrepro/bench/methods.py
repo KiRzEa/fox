@@ -43,6 +43,8 @@ from foxrepro.bench.generate import (
     GenConfig, Method, MethodOutput, register_method,
 )
 from foxrepro.data.loaders import Sample
+from foxrepro.fox.reference import SID_AGG_LAYER as _REF_SID_AGG_LAYER
+from foxrepro.fox.reference import SID_ATTENTION_RANK as _REF_SID_ATTENTION_RANK
 from foxrepro.storage import SYSTEM_PROMPT_IDS, WRAPPER_IDS
 
 #: Conversation wrappers, selected by ``--wrapper``.
@@ -174,6 +176,36 @@ FOX_DEFAULTS: Dict[str, Any] = {
 #: VCD's published noise schedule (Leng et al., CVPR 2024).
 VCD_NOISE_STEP_DEFAULT = 500
 
+#: SID's CT2S defaults, from ``pope_eval.py``'s argparse block. Imported from
+#: the reference module rather than restated, so a correction to the
+#: transcription cannot leave the method running the old value.
+SID_AGG_LAYER = _REF_SID_AGG_LAYER
+SID_ATTENTION_RANK = _REF_SID_ATTENTION_RANK
+
+
+def _refuse_untracked_override(name: str, value: Any, default: Any) -> Any:
+    """Refuse a ``cfg.extra`` hyperparameter that the run key cannot see.
+
+    ``storage.VARIANT_FIELDS`` is what the run filename is built from, and
+    ``noise_step`` / ``sid_rank`` / ``sid_agg_layer`` are not in it. Two runs
+    that differ only in one of them would therefore land in the SAME file and
+    resume from each other -- half one sweep point, half another, with no
+    error anywhere and a plausible number at the end.
+
+    So these are usable at their published values and refused otherwise. To
+    sweep one, add it to ``VARIANT_FIELDS`` and to ``Job`` first; that is a
+    deliberate change with a filename migration attached, which is the right
+    size for the hazard.
+    """
+    if value == default:
+        return value
+    raise ValueError(
+        f"{name}={value!r} differs from the published default {default!r}, "
+        f"but {name} is not in storage.VARIANT_FIELDS -- so this run would "
+        f"share a file with the default one and the two would silently merge. "
+        f"Add it to VARIANT_FIELDS and to plan.Job before sweeping it."
+    )
+
 
 def parse_layer_window(spec: Optional[str]) -> frozenset:
     """``"2-15"`` or ``"2,3,4"`` -> a frozenset of layer indices.
@@ -270,14 +302,26 @@ class _LlavaMethod(Method):
         return info
 
     # ---- per sample ------------------------------------------------------- #
-    def _prepare(self, sample: Sample, prompt: str) -> Dict[str, Any]:
+    def _encode(self, sample: Sample, text: str) -> Dict[str, Any]:
+        """Image read plus processor call, for an already-rendered prompt.
+
+        Split out from :meth:`_prepare` because ICD needs a second encode of
+        a *different* prompt against the same image, and because this is the
+        one place in a method that touches the filesystem -- so a test can
+        stub exactly this and still run the real prompt rendering.
+        """
         from PIL import Image
 
-        text = render_full_prompt(
-            prompt, self._system_prompt_id(), self._wrapper_id())
         with Image.open(sample.image_path) as im:
             image = im.convert("RGB")
         return self.processor(images=image, text=text, return_tensors="pt")
+
+    def _prepare(self, sample: Sample, prompt: str) -> Dict[str, Any]:
+        return self._encode(
+            sample,
+            render_full_prompt(
+                prompt, self._system_prompt_id(), self._wrapper_id()),
+        )
 
     def _decode_kwargs(self) -> Dict[str, Any]:
         """Per-method arguments to ``fox_generate``."""
@@ -383,38 +427,43 @@ class FoxMethod(_LlavaMethod):
 
 
 @register_method
-class VCDMethod(_LlavaMethod):
-    """VCD (Leng et al., CVPR 2024): contrast against a diffusion-noised image.
+class VcdFoxFusionMethod(_LlavaMethod):
+    """**Not VCD.** VCD's noised image inside Fox's ADDITIVE fusion.
 
-    Same dual-branch machinery, but row 1 sees a corrupted image instead of a
-    modified attention pattern, and no head intervention runs.
+    Kept because it is what the Fox release's own reachable code path does --
+    `--use-vcd` is unreachable there (`--use-cd` is `store_true, default=True`
+    and cannot be unset), so its `images_cd` is the clean image and its fusion
+    is Fox's. Running the same shape here makes that behaviour measurable
+    instead of only described.
 
-    A caveat worth recording: this reproduces VCD's *noised second branch*
-    inside Fox's additive gated fusion, not VCD's own contrastive formula
-    ``(1 + a) * logits - a * logits_cd``. The released Fox repo has the same
-    property -- its reachable ``use_cd`` path runs VCD noise through Fox's
-    fusion -- so a faithful VCD baseline needs the upstream VCD repo. This is
-    labelled ``vcd-noise-fox-fusion`` in ``describe()`` so no table silently
-    presents it as VCD.
+    It is NOT the VCD baseline, and the name says so now that
+    :class:`VCDMethod` exists beside it. VCD subtracts; this adds. Earlier
+    results in the archive carry the old ``vcd`` name -- see
+    docs/DEVIATIONS.md.
     """
 
-    name = "vcd"
+    name = "vcd_fox_fusion"
 
     def __init__(self, cfg: GenConfig) -> None:
         super().__init__(cfg)
-        self.noise_step = int(
-            (cfg.extra or {}).get("noise_step", VCD_NOISE_STEP_DEFAULT)
+        self.noise_step = int(_refuse_untracked_override(
+            "noise_step",
+            int((cfg.extra or {}).get("noise_step", VCD_NOISE_STEP_DEFAULT)),
+            VCD_NOISE_STEP_DEFAULT))
+
+    def _noised(self, pixel_values: Any, generator: Any = None) -> Any:
+        """VCD's corruption, from the verified kernel.
+
+        This used to carry its own linear DDPM schedule, which is not VCD's.
+        The released schedule is sigmoid and keeps 0.863 of the image at step
+        500 where the linear one keeps 0.280. The kernel version is asserted
+        bit-identical to ``vcd_add_noise.py``; nothing here reimplements it.
+        """
+        from foxrepro.fox.kernel import add_diffusion_noise
+
+        out = add_diffusion_noise(
+            pixel_values.float(), self.noise_step, generator=generator
         )
-
-    def _noised(self, pixel_values: Any) -> Any:
-        """VCD's forward-diffusion corruption at ``noise_step``."""
-        import torch
-
-        steps = 1000
-        betas = torch.linspace(1e-4, 0.02, steps)
-        alpha_bar = torch.cumprod(1.0 - betas, dim=0)[self.noise_step - 1]
-        noise = torch.randn_like(pixel_values.float())
-        out = alpha_bar.sqrt() * pixel_values.float() + (1 - alpha_bar).sqrt() * noise
         return out.to(pixel_values.dtype)
 
     def generate(self, sample: Sample, prompt: str) -> MethodOutput:
@@ -471,3 +520,279 @@ class VCDMethod(_LlavaMethod):
         )
         info["noise_step"] = self.noise_step
         return info
+
+
+# --------------------------------------------------------------------------- #
+# the compared baselines: one decoding rule, two perturbations
+# --------------------------------------------------------------------------- #
+class _ContrastiveMethod(_LlavaMethod):
+    """Shared body for VCD and ICD.
+
+    They differ in exactly one thing -- what the negative branch is shown --
+    so they share everything else, including the decoding rule
+    ``(1 + a) * z_obs - a * z_neg`` with the adaptive plausibility constraint.
+    Writing them as two independent classes would invite them to drift, and
+    the drift would be invisible: both would still produce numbers.
+
+    Subclasses implement :meth:`_negative`, which returns the keyword
+    arguments that build the negative branch.
+    """
+
+    #: Contrast strength. VCD publishes 1.0; SID's fork of the same file
+    #: defaults to 0.5. Stated per subclass rather than shared, because the
+    #: formula is shared and the tuning is not.
+    cd_alpha: ClassVar[float] = 1.0
+    cd_beta: ClassVar[float] = 0.1
+
+    def _negative(self, inputs: Dict[str, Any], sample: Sample,
+                  prompt: str, generator: Any) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    def _decode_kwargs(self) -> Dict[str, Any]:
+        """Exactly the keywords ``fox_generate`` takes -- nothing else.
+
+        Kept separate from :meth:`_record` because a subclass hyperparameter
+        that is not a decode-loop argument (VCD's ``noise_step``) belongs in
+        the provenance and would be a ``TypeError`` here.
+        """
+        return {
+            "cd_alpha": float(
+                self.cfg.alpha if self.cfg.alpha is not None else self.cd_alpha),
+            "cd_beta": float(
+                self.cfg.beta if self.cfg.beta is not None else self.cd_beta),
+        }
+
+    def _record(self) -> Dict[str, Any]:
+        """Every resolved hyperparameter, for ``extra`` and ``describe``."""
+        return dict(self._decode_kwargs())
+
+    def generate(self, sample: Sample, prompt: str) -> MethodOutput:
+        import torch
+
+        inputs = dict(self._prepare(sample, prompt))
+        cfg = self.cfg
+        seed = None if cfg.seed is None else (
+            cfg.seed * 1_000_003 + hash(sample.sample_id) % 1_000_003
+        )
+        # One generator for the perturbation and the sampler, seeded per
+        # sample: the released code draws the image noise from global RNG,
+        # which makes the one component whose purpose is randomness the one
+        # part of a seeded run that does not repeat.
+        dev = getattr(self.model, "device", None)
+        gen = None
+        if seed is not None:
+            gen = torch.Generator(device=dev) if dev is not None else torch.Generator()
+            gen.manual_seed(seed)
+
+        neg = self._negative(inputs, sample, prompt, gen)
+        result = self._attn.fox_generate(
+            self.model, inputs,
+            max_new_tokens=cfg.max_new_tokens,
+            greedy=(cfg.decoding == "greedy"),
+            top_p=cfg.top_p, temperature=cfg.temperature,
+            logit_dtype=cfg.logit_dtype, softmax_dtype=cfg.softmax_dtype,
+            eager_layers=self._eager_layers, seed=seed, collect_trace=True,
+            single_branch=False,
+            # The intervention is OFF: the perturbation IS the method. Leaving
+            # Fox's head edit on would make this Fox-plus-a-noisy-image.
+            mode="off", fusion="contrastive",
+            **self._decode_kwargs(), **neg,
+        )
+        text = self.processor.tokenizer.decode(
+            result["token_ids"], skip_special_tokens=True
+        ).strip()
+        trace = result.get("trace") or []
+        extra: Dict[str, Any] = {
+            "variant": self.name,
+            "image_span": list(result["image_span"]),
+            "n_steps": len(trace),
+            **self._record(),
+        }
+        if "sid_n_kept" in result:
+            # Per-step, because the keep-set is recomputed per step. A run
+            # whose min and max are not both `sid_rank` either hit the clamp
+            # or never ran CT2S at all, and would look like a finished SID.
+            kept = result["sid_n_kept"] or [0]
+            extra["sid_n_kept_min"] = min(kept)
+            extra["sid_n_kept_max"] = max(kept)
+        return MethodOutput(
+            text=text,
+            n_prompt_tokens=int(result["n_prompt_tokens"]),
+            n_gen_tokens=int(result["n_gen_tokens"]),
+            extra=extra,
+        )
+
+    def describe(self) -> Dict[str, Any]:
+        info = dict(super().describe())
+        info["resolved_hyperparameters"] = self._record()
+        info["fusion"] = "contrastive"
+        # Recorded, not implied: these rows must be readable as "no head edit
+        # happened here" without re-reading the class. Fox's intervention
+        # being off is what makes them baselines.
+        info["mode"] = "off"
+        info["intervention"] = "none"
+        return info
+
+
+@register_method
+class VCDMethod(_ContrastiveMethod):
+    """VCD (Leng et al., CVPR 2024): contrast against a diffusion-noised image.
+
+    The negative branch sees the same prompt and a corrupted image, so the
+    contrast isolates what the model was reading off the picture.
+
+    The noise schedule is the released sigmoid one, from the verified kernel
+    -- not the linear DDPM schedule, which at step 500 keeps 0.280 of the
+    image against the correct 0.863 and would be contrasting against noise.
+    """
+
+    name = "vcd"
+    cd_alpha: ClassVar[float] = 1.0
+
+    def __init__(self, cfg: GenConfig) -> None:
+        super().__init__(cfg)
+        self.noise_step = int(_refuse_untracked_override(
+            "noise_step",
+            int((cfg.extra or {}).get("noise_step", VCD_NOISE_STEP_DEFAULT)),
+            VCD_NOISE_STEP_DEFAULT))
+
+    def _negative(self, inputs, sample, prompt, generator):
+        from foxrepro.fox.kernel import add_diffusion_noise
+
+        px = inputs["pixel_values"]
+        noised = add_diffusion_noise(
+            px.float(), self.noise_step, generator=generator
+        ).to(px.dtype)
+        return {"pixel_values_do": noised}
+
+    def _record(self) -> Dict[str, Any]:
+        d = super()._record()
+        d["noise_step"] = self.noise_step
+        return d
+
+
+@register_method
+class ICDMethod(_ContrastiveMethod):
+    """ICD (Wang et al., ACL 2024): contrast against a disturbed instruction.
+
+    The negative branch sees the same image and a prompt carrying a negative
+    role description, so the contrast isolates what the instruction was
+    contributing rather than what the image was.
+
+    The string and its insertion point are transcribed from
+    ``pope_eval.py:291-295``, which is identical in SID and in the Fox fork::
+
+        text_cd = 'You are a confused object detector.'
+        prompt_cd = qu.split("<ImageHere>")[0] + "<ImageHere>" + ' ' + text_cd
+                    + qu.split("<ImageHere>")[-1]
+
+    so it lands immediately after the image marker and before the question,
+    with a single space on each side. ``<ImageHere>`` is ``<image>`` in the
+    converted checkpoint.
+
+    The two branches cannot be batched -- the sequences differ in length --
+    so ``fox_generate`` runs them as two passes with two caches, which is
+    what the released code does anyway.
+    """
+
+    name = "icd"
+    cd_alpha: ClassVar[float] = 1.0
+
+    #: ``pope_eval.py:291``, verbatim.
+    negative_instruction: ClassVar[str] = "You are a confused object detector."
+
+    def disturbed_prompt(self, prompt: str) -> str:
+        """The negative prompt string, exposed so a test can assert on it."""
+        text = render_full_prompt(
+            prompt, self._system_prompt_id(), self._wrapper_id())
+        marker = "<image>"
+        if marker not in text:
+            raise ValueError(
+                f"the rendered prompt has no {marker!r} to insert the "
+                f"negative instruction after: {text[:80]!r}"
+            )
+        head, _, tail = text.partition(marker)
+        return f"{head}{marker} {self.negative_instruction}{tail}"
+
+    def _negative(self, inputs, sample, prompt, generator):
+        enc = self._encode(sample, self.disturbed_prompt(prompt))
+        dev = inputs["input_ids"].device
+        return {
+            "input_ids_do": enc["input_ids"].to(dev),
+            "attn_mask_do": enc.get("attention_mask", None).to(dev)
+            if enc.get("attention_mask", None) is not None else None,
+        }
+
+    def describe(self) -> Dict[str, Any]:
+        info = dict(super().describe())
+        info["negative_instruction"] = self.negative_instruction
+        return info
+
+
+@register_method
+class SIDMethod(_ContrastiveMethod):
+    """SID (Huo et al., ICLR 2025): contrast against the model's own bad read.
+
+    Same image, same prompt. The negative branch is built *inside* the model
+    by CT2S: from layer ``agg_layer`` onward, the only vision keys left
+    visible are the ``rank`` the last query attends to **least**. So the
+    contrast is between the model reading the picture and the model reading
+    the part of the picture it had already decided was irrelevant -- no
+    preprocessing, no second prompt, and the cheapest negative branch of the
+    three compared methods.
+
+    Three defaults here differ from VCD's and are not interchangeable:
+
+    * ``cd_alpha = 0.5``, not 1.0. ``pope_eval.py`` parses ``--cd-alpha 1``
+      and then does not pass it (``pope_eval.py:327-328`` are commented out),
+      so ``vcd_sample.py:168``'s own default is what ran.
+    * ``rank = 100`` of 576, ``largest=False``. The ``largest=True`` line
+      directly above it in the source is FastV, a compute optimisation that
+      keeps the *most*-attended tokens. Flipping it would build a better
+      negative branch and subtract the wrong thing.
+    * ``agg_layer = 2``, with the ranking read from layer 1.
+
+    ``--sample-greedy`` also defaults to True in the released harness, which
+    argmaxes the *unmasked* ``diffs`` and so bypasses both the beta cutoff
+    and the temperature/top-p warpers -- SID's published POPE numbers are
+    greedy whatever ``--sample`` says. Run it both ways and report both.
+    """
+
+    name = "sid"
+    cd_alpha: ClassVar[float] = 0.5
+
+    #: ``--fast-v-agg-layer``.
+    agg_layer: ClassVar[int] = SID_AGG_LAYER
+    #: ``--fast-v-attention-rank``.
+    rank: ClassVar[int] = SID_ATTENTION_RANK
+
+    def __init__(self, cfg: GenConfig) -> None:
+        super().__init__(cfg)
+        extra = cfg.extra or {}
+        self.agg_layer = int(_refuse_untracked_override(
+            "sid_agg_layer",
+            int(extra.get("sid_agg_layer", type(self).agg_layer)),
+            type(self).agg_layer))
+        self.rank = int(_refuse_untracked_override(
+            "sid_rank",
+            int(extra.get("sid_rank", type(self).rank)),
+            type(self).rank))
+
+    def _negative(self, inputs, sample, prompt, generator):
+        """Nothing external to build: the perturbation is inside the model.
+
+        Returning the CT2S switches rather than a tensor is the whole point
+        of SID, and it is why this method needs no second encode and no
+        second image.
+        """
+        return {
+            "sid": True,
+            "sid_agg_layer": self.agg_layer,
+            "sid_rank": self.rank,
+        }
+
+    def _record(self) -> Dict[str, Any]:
+        d = super()._record()
+        d["sid_agg_layer"] = self.agg_layer
+        d["sid_rank"] = self.rank
+        return d

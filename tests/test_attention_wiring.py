@@ -844,3 +844,198 @@ class TestBackboneProbe(unittest.TestCase):
             self.skipTest("no network")
         self.assertEqual(r["verdict"], "UNCLEAR")
         self.assertEqual(r["preprocessing"]["source"], "unknown")
+
+
+# --------------------------------------------------------------------------- #
+# SID / CT2S
+# --------------------------------------------------------------------------- #
+class _Ct2sBase(unittest.TestCase):
+    """Two rows: row 0 is the clean branch, row 1 the CT2S one."""
+
+    AGG = 2
+    RANK = 7
+
+    def setUp(self) -> None:
+        self.q, self.k, self.v = qkv(batch=2, seed=3)
+        self.mask = causal_mask(SEQ)
+        self.scaling = 1.0 / math.sqrt(HEAD_DIM)
+        self.ctx = A.FOX.configured(
+            enabled=True, mode="off",
+            img_start=IMG_START, img_end=IMG_END,
+            sid_enabled=True, sid_agg_layer=self.AGG, sid_rank=self.RANK,
+            sid_rows=torch.tensor([1]), sid_keep=None,
+        )
+        self.ctx.__enter__()
+        self.addCleanup(lambda: self.ctx.__exit__(None, None, None))
+
+    def call(self, layer_idx: int, mask=None):
+        """``mask=None`` means the default causal mask; ``False`` means None."""
+        m = self.mask if mask is None else (None if mask is False else mask)
+        return A.fox_attention_forward(
+            StubAttention(layer_idx), self.q, self.k, self.v, m,
+            scaling=self.scaling,
+        )
+
+    def read_ranking(self) -> torch.Tensor:
+        self.call(self.AGG - 1)
+        self.assertIsNotNone(A.FOX.sid_keep)
+        return A.FOX.sid_keep
+
+
+class TestCt2sRanking(_Ct2sBase):
+    def test_the_ranking_layer_changes_nothing_about_the_output(self) -> None:
+        """Layer agg-1 only *reads*. It must stay on the stock SDPA path.
+
+        Were it switched to eager to get the probabilities, this baseline's
+        numerics would differ from every other arm at one layer for no
+        methodological reason.
+        """
+        got, weights = self.call(self.AGG - 1)
+        want = sdpa_attention_forward(
+            StubAttention(self.AGG - 1), self.q, self.k, self.v, self.mask,
+            scaling=self.scaling, dropout=0.0,
+        )[0]
+        self.assertIsNone(weights)
+        self.assertTrue(torch.equal(got, want))
+
+    def test_the_ranking_equals_a_full_softmax_read_the_released_way(self) -> None:
+        """Only the last query row is computed; it must equal the full matrix.
+
+        Softmax is row-independent, so this is exact rather than approximate
+        -- and it is what lets the arm run without materialising a
+        [2, 32, 605, 605] tensor per step.
+        """
+        from foxrepro.fox.reference import reference_ct2s_keep_indices
+
+        logits = torch.matmul(self.q, self.k.transpose(2, 3)) * self.scaling
+        logits = logits + self.mask[..., : self.k.shape[-2]].to(logits.dtype)
+        probs = F.softmax(logits, dim=-1, dtype=torch.float32).to(self.q.dtype)
+        want = reference_ct2s_keep_indices(
+            probs[1:], IMG_START, N_IMG, self.RANK)
+        self.assertTrue(torch.equal(want, self.read_ranking()))
+
+    def test_it_is_read_from_the_row_that_gets_pruned(self) -> None:
+        with A.FOX.configured(sid_rows=torch.tensor([0]), sid_keep=None):
+            a = self.read_ranking().clone()
+        with A.FOX.configured(sid_rows=torch.tensor([1]), sid_keep=None):
+            b = self.read_ranking().clone()
+        # the two rows see different Q and K, so the rankings must differ
+        self.assertFalse(torch.equal(a, b))
+
+    def test_the_ranking_is_recomputed_per_forward(self) -> None:
+        """A stale keep-set would prune on last step's attention."""
+        first = self.read_ranking().clone()
+        q2, k2, v2 = qkv(batch=2, seed=99)
+        self.q, self.k, self.v = q2, k2, v2
+        A.FOX.sid_keep = None
+        second = self.read_ranking().clone()
+        self.assertFalse(torch.equal(first, second))
+
+
+class TestCt2sMasking(_Ct2sBase):
+    """What the layers from ``agg_layer`` onward are actually handed.
+
+    Asserted on the additive mask the function passes to SDPA, read by
+    spying on ``sdpa_attention_forward`` -- i.e. on the argument the real
+    attention kernel receives, not on a recomputation of it.
+    """
+
+    def mask_at(self, layer_idx: int) -> torch.Tensor:
+        seen = {}
+        import transformers.integrations.sdpa_attention as S
+
+        real = S.sdpa_attention_forward
+
+        def spy(module, q, k, v, attention_mask, **kw):  # noqa: ANN001
+            seen["mask"] = (None if attention_mask is None
+                            else attention_mask.clone())
+            return real(module, q, k, v, attention_mask, **kw)
+
+        S.sdpa_attention_forward = spy
+        try:
+            self.call(layer_idx)
+        finally:
+            S.sdpa_attention_forward = real
+        self.assertIn("mask", seen, "the layer never reached SDPA")
+        return seen["mask"]
+
+    def dropped(self, keep: torch.Tensor):
+        return sorted(set(range(IMG_START, IMG_END + 1)) - set(keep.tolist()))
+
+    def test_dropped_vision_keys_are_minus_inf_on_the_pruned_row(self) -> None:
+        keep = self.read_ranking()
+        m = self.mask_at(self.AGG)
+        drop = self.dropped(keep)
+        self.assertEqual(len(drop), N_IMG - self.RANK)
+        floor = torch.finfo(m.dtype).min
+        self.assertTrue(bool((m[1, :, :, drop] == floor).all()))
+        # and the kept ones are still attendable from the last query
+        self.assertTrue(bool((m[1, :, -1, keep.tolist()] == 0).all()))
+
+    def test_the_clean_row_is_untouched(self) -> None:
+        keep = self.read_ranking()
+        m = self.mask_at(self.AGG)
+        self.assertTrue(torch.equal(m[0], self.mask[0]))
+        self.assertTrue(
+            bool((m[0, :, -1, self.dropped(keep)] == 0).all()))
+
+    def test_text_and_system_keys_are_never_masked(self) -> None:
+        self.read_ranking()
+        m = self.mask_at(self.AGG)
+        self.assertTrue(bool((m[1, :, -1, :IMG_START] == 0).all()))
+        self.assertTrue(bool((m[1, :, -1, IMG_END + 1:] == 0).all()))
+
+    def test_causality_survives_the_rewrite(self) -> None:
+        """The mask is cloned and written into, so the triangle must remain."""
+        self.read_ranking()
+        m = self.mask_at(self.AGG)
+        floor = torch.finfo(m.dtype).min
+        for row in (0, 1):
+            with self.subTest(row=row):
+                future = torch.triu(
+                    torch.ones(SEQ, SEQ, dtype=torch.bool), diagonal=1)
+                self.assertTrue(bool((m[row, 0][future] == floor).all()))
+
+    def test_every_layer_from_agg_onward_gets_the_same_mask(self) -> None:
+        keep = self.read_ranking()
+        drop = self.dropped(keep)
+        floor = None
+        first = None
+        for layer in (self.AGG, self.AGG + 1, 31):
+            with self.subTest(layer=layer):
+                m = self.mask_at(layer)
+                floor = torch.finfo(m.dtype).min
+                self.assertTrue(bool((m[1, :, :, drop] == floor).all()))
+                if first is None:
+                    first = m
+                else:
+                    self.assertTrue(torch.equal(first, m))
+
+    def test_layers_below_agg_get_the_stock_mask(self) -> None:
+        self.read_ranking()
+        for layer in (0, self.AGG - 1):
+            with self.subTest(layer=layer):
+                self.assertTrue(torch.equal(self.mask_at(layer), self.mask))
+
+    def test_the_callers_mask_is_not_mutated(self) -> None:
+        """One mask object is reused across all 32 layers of a forward.
+
+        Writing into it in place would prune the clean row as well, from the
+        next layer onward, and the arm would stop being a contrast at all.
+        """
+        self.read_ranking()
+        before = self.mask.clone()
+        self.call(self.AGG)
+        self.assertTrue(torch.equal(before, self.mask))
+
+    def test_a_missing_ranking_raises_rather_than_skipping_the_mask(self) -> None:
+        A.FOX.sid_keep = None
+        with self.assertRaises(RuntimeError) as cm:
+            self.call(self.AGG)
+        self.assertIn("keep-set", str(cm.exception))
+
+    def test_no_mask_raises_rather_than_dropping_causality(self) -> None:
+        self.read_ranking()
+        with self.assertRaises(RuntimeError) as cm:
+            self.call(self.AGG, mask=False)
+        self.assertIn("attention mask", str(cm.exception))

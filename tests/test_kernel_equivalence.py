@@ -598,3 +598,117 @@ class TestVcdNoiseScheduleBitEquality(unittest.TestCase):
         c = add_diffusion_noise(img, 500, generator=torch.Generator().manual_seed(8))
         self.assertTrue(torch.equal(a, b))
         self.assertFalse(torch.equal(a, c))
+
+
+class TestCt2sBitEquality(unittest.TestCase):
+    """SID's CT2S selection, against the transcribed original.
+
+    Three properties, each of which has a plausible wrong version that would
+    still produce numbers:
+
+    * ``largest=False`` -- the kept tokens are the least attended. The
+      ``largest=True`` line is still in the source one line above, commented
+      out; it is FastV, and it keeps the opposite set.
+    * the ranking comes from ONE query position (the last) of ONE row, not
+      from a mean over the sequence;
+    * the mean over heads runs in the model dtype, so an fp32 mean can
+      reorder near-ties and keep a different set.
+    """
+
+    N_IMG = 576
+    RANK = 100
+
+    def _probs(self, n_keys: int, dtype=torch.float16, seed: int = 11):
+        from foxrepro.fox.kernel import ct2s_keep  # noqa: F401  (import check)
+
+        g = torch.Generator().manual_seed(seed)
+        p = torch.rand(2, 32, n_keys, n_keys, generator=g, dtype=torch.float32)
+        p = p / p.sum(dim=-1, keepdim=True)
+        return p.to(dtype)
+
+    def test_keep_set_matches_the_reference(self) -> None:
+        from foxrepro.fox.kernel import ct2s_keep
+        from foxrepro.fox.reference import reference_ct2s_keep_indices
+
+        lo = 24
+        n_keys = lo + self.N_IMG + 8
+        probs = self._probs(n_keys)
+        want = reference_ct2s_keep_indices(probs, lo, self.N_IMG, self.RANK)
+        got = ct2s_keep(probs, lo, lo + self.N_IMG - 1,
+                        rank=self.RANK, row=0)
+        self.assertTrue(torch.equal(want, got))
+        self.assertEqual(int(got.numel()), self.RANK)
+
+    def test_the_mask_is_the_complement_of_the_keep_set(self) -> None:
+        from foxrepro.fox.kernel import ct2s_dropped_keys, ct2s_keep
+        from foxrepro.fox.reference import (
+            reference_ct2s_attention_mask, reference_ct2s_keep_indices,
+        )
+
+        lo = 24
+        n_keys = lo + self.N_IMG + 8
+        probs = self._probs(n_keys)
+        keep = reference_ct2s_keep_indices(probs, lo, self.N_IMG, self.RANK)
+        want = reference_ct2s_attention_mask(1, n_keys, lo, self.N_IMG, keep)
+        got = ct2s_dropped_keys(
+            ct2s_keep(probs, lo, lo + self.N_IMG - 1, rank=self.RANK),
+            lo, lo + self.N_IMG - 1, n_keys,
+        )
+        self.assertTrue(torch.equal(~want[0], got))
+        # 476 of 576 vision keys go; nothing outside the image span moves
+        self.assertEqual(int(got.sum()), self.N_IMG - self.RANK)
+        self.assertFalse(bool(got[:lo].any()))
+        self.assertFalse(bool(got[lo + self.N_IMG:].any()))
+
+    def test_it_keeps_the_least_attended_not_the_most(self) -> None:
+        """A hand-built ranking, so the direction cannot be read both ways."""
+        from foxrepro.fox.kernel import ct2s_keep
+
+        lo, n_img, n_keys = 2, 8, 12
+        probs = torch.zeros(1, 1, n_keys, n_keys)
+        # ascending attention across the image span: key lo+i gets i+1
+        probs[0, 0, -1, lo:lo + n_img] = torch.arange(1.0, n_img + 1)
+        got = sorted(ct2s_keep(probs, lo, lo + n_img - 1, rank=3).tolist())
+        self.assertEqual(got, [lo, lo + 1, lo + 2])
+
+    def test_only_the_last_query_row_is_read(self) -> None:
+        from foxrepro.fox.kernel import ct2s_keep
+
+        lo, n_img, n_keys = 2, 8, 12
+        probs = torch.zeros(1, 1, n_keys, n_keys)
+        probs[0, 0, :-1, lo:lo + n_img] = torch.arange(n_img, 0.0, -1.0)
+        probs[0, 0, -1, lo:lo + n_img] = torch.arange(1.0, n_img + 1)
+        got = sorted(ct2s_keep(probs, lo, lo + n_img - 1, rank=2).tolist())
+        self.assertEqual(got, [lo, lo + 1])  # ascending row, not the others
+
+    def test_the_row_argument_picks_the_branch(self) -> None:
+        from foxrepro.fox.kernel import ct2s_keep
+
+        lo, n_img, n_keys = 2, 8, 12
+        probs = torch.zeros(2, 1, n_keys, n_keys)
+        probs[0, 0, -1, lo:lo + n_img] = torch.arange(1.0, n_img + 1)
+        probs[1, 0, -1, lo:lo + n_img] = torch.arange(n_img, 0.0, -1.0)
+        a = sorted(ct2s_keep(probs, lo, lo + n_img - 1, rank=2, row=0).tolist())
+        b = sorted(ct2s_keep(probs, lo, lo + n_img - 1, rank=2, row=1).tolist())
+        self.assertEqual(a, [lo, lo + 1])
+        self.assertEqual(b, [lo + n_img - 2, lo + n_img - 1])
+
+    def test_decode_length_does_not_unmask_the_image(self) -> None:
+        """During decode n_keys grows past img_end; the mask must still hold."""
+        from foxrepro.fox.kernel import ct2s_dropped_keys
+
+        lo, n_img = 24, self.N_IMG
+        keep = torch.arange(lo, lo + self.RANK)
+        for extra in (0, 1, 50):
+            with self.subTest(extra=extra):
+                got = ct2s_dropped_keys(
+                    keep, lo, lo + n_img - 1, lo + n_img + extra)
+                self.assertEqual(int(got.sum()), n_img - self.RANK)
+                self.assertFalse(bool(got[lo + n_img:].any()))
+
+    def test_rank_is_clamped_to_the_span_not_crashed(self) -> None:
+        from foxrepro.fox.kernel import ct2s_keep
+
+        probs = torch.rand(1, 1, 6, 6)
+        got = ct2s_keep(probs, 1, 3, rank=100)
+        self.assertEqual(int(got.numel()), 3)

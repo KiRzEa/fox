@@ -401,7 +401,17 @@ def register_method(cls: Type[Method]) -> Type[Method]:
 
 
 #: Methods whose implementations live in ``bench/methods.py`` and need torch.
-_GPU_METHODS = frozenset({"sampling", "fox", "vcd"})
+#:
+#: This list is a routing hint for the lazy import, nothing more. It used to
+#: be unioned into :func:`list_methods`, which made the advertised list a
+#: superset of what :func:`get_method` could return -- renaming ``vcd`` to
+#: ``vcd_fox_fusion`` left ``vcd`` advertised and unfetchable, and the error
+#: message helpfully listed the name it had just refused. A name here that is
+#: not in ``bench/methods.py`` is now a test failure rather than a phantom
+#: entry in ``--list-methods``.
+_GPU_METHODS = frozenset({
+    "sampling", "fox", "vcd", "icd", "sid", "vcd_fox_fusion",
+})
 
 
 def _load_gpu_methods() -> None:
@@ -462,12 +472,22 @@ def get_method(name: str) -> Type[Method]:
 
 
 def list_methods() -> List[str]:
-    """Names of all registered methods."""
-    return sorted(set(_REGISTRY) | _GPU_METHODS)
+    """Names of all registered methods.
+
+    Imports the GPU implementations first when it can, so the list is what
+    :func:`get_method` will actually return. Falls back to the registry alone
+    when torch is absent, which is the laptop/evaluate path -- a shorter
+    honest list beats a longer one containing names that cannot be fetched.
+    """
+    try:
+        _load_gpu_methods()
+    except ImportError:
+        pass
+    return sorted(_REGISTRY)
 
 
 # --------------------------------------------------------------------------- #
-# remaining stubs: sid and opera. sampling/fox/vcd are real, in bench/methods.py
+# remaining stub: opera. The rest are real, in bench/methods.py
 # --------------------------------------------------------------------------- #
 class _NotImplementedMethod(Method):
     """Shared body for the not-yet-implemented methods."""
@@ -487,14 +507,6 @@ class _NotImplementedMethod(Method):
 
     def generate(self, sample: Sample, prompt: str) -> MethodOutput:
         raise NotImplementedError(f"{self.name}.generate: see load()'s message")
-
-
-@register_method
-class SIDMethod(_NotImplementedMethod):
-    """SID (Huo et al., 2025): self-contrastive token reweighting."""
-
-    name = "sid"
-    todo = "self-introspective decoding; reweight candidates from a self-contrastive branch."
 
 
 @register_method

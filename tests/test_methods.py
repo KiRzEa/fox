@@ -163,25 +163,19 @@ class _Base(unittest.TestCase):
         A.load_llava = lambda *a, **k: (self.model, self.processor)  # type: ignore[assignment]
         self.addCleanup(lambda: setattr(A, "load_llava", self._orig_load))
 
-        self._orig_prepare = M._LlavaMethod._prepare
+        self._orig_encode = M._LlavaMethod._encode
 
-        def _prepare(inner_self, sample, prompt):  # noqa: ANN001
-            # Only the PIL image read is stubbed out; the prompt still goes
-            # through the real render_full_prompt, so the system-prompt arms
-            # are actually exercised rather than bypassed.
+        def _encode(inner_self, sample, text):  # noqa: ANN001
+            # Only the PIL image read is stubbed out. The prompt still goes
+            # through the real _prepare -> render_full_prompt, so the
+            # system-prompt arms and ICD's disturbed prompt are actually
+            # exercised rather than bypassed.
             return inner_self.processor(
-                images=None,
-                text=render_full_prompt(
-                    prompt,
-                    inner_self._system_prompt_id(),
-                    inner_self._wrapper_id(),
-                ),
-                return_tensors="pt",
-            )
+                images=None, text=text, return_tensors="pt")
 
-        M._LlavaMethod._prepare = _prepare  # type: ignore[assignment]
+        M._LlavaMethod._encode = _encode  # type: ignore[assignment]
         self.addCleanup(
-            lambda: setattr(M._LlavaMethod, "_prepare", self._orig_prepare)
+            lambda: setattr(M._LlavaMethod, "_encode", self._orig_encode)
         )
 
     def run_method(self, name: str, **over: Any):
@@ -217,6 +211,21 @@ class TestBranchStructure(_Base):
         self.run_method("vcd")
         self.assertEqual(set(self.model.rows_seen), {2})
         self.assertEqual(set(self.model.pixel_rows_seen), {2})
+
+    def test_vcd_fox_fusion_also_feeds_two_images(self) -> None:
+        """The old arm, kept under its honest name."""
+        self.run_method("vcd_fox_fusion")
+        self.assertEqual(set(self.model.rows_seen), {2})
+        self.assertEqual(set(self.model.pixel_rows_seen), {2})
+
+    def test_icd_runs_two_passes_with_one_image_each(self) -> None:
+        """ICD disturbs the instruction, so the sequences differ in length.
+
+        They cannot share a batch; the loop must run two single-row passes.
+        """
+        self.run_method("icd")
+        self.assertEqual(set(self.model.rows_seen), {1})
+        self.assertEqual(set(self.model.pixel_rows_seen), {1})
 
 
 class TestPromptWrapper(_Base):
@@ -274,18 +283,34 @@ class TestFoxHyperparameters(_Base):
 
 
 class TestVcdLabelling(_Base):
-    def test_vcd_is_labelled_as_not_faithful(self) -> None:
-        """No table may silently present this as VCD."""
-        m, out = self.run_method("vcd")
+    def test_fusion_hybrid_is_labelled_as_not_faithful(self) -> None:
+        """No table may present the hybrid as VCD.
+
+        ``vcd`` is now VCD's own contrastive rule; the hybrid that ran in
+        rounds 1-5 keeps its own name and its own caveat.
+        """
+        m, out = self.run_method("vcd_fox_fusion")
         self.assertEqual(out.extra["variant"], "vcd-noise-fox-fusion")
         d = m.describe()
         self.assertEqual(d["variant"], "vcd-noise-fox-fusion")
         self.assertIn("upstream", d["caveat"])
 
     def test_noise_step_is_recorded(self) -> None:
+        for arm in ("vcd", "vcd_fox_fusion"):
+            with self.subTest(arm=arm):
+                m, out = self.run_method(arm)
+                self.assertEqual(out.extra["noise_step"], 500)
+                self.assertEqual(
+                    m.describe()["resolved_hyperparameters"]["noise_step"]
+                    if arm == "vcd" else m.describe()["noise_step"],
+                    500,
+                )
+
+    def test_real_vcd_is_not_labelled_as_the_hybrid(self) -> None:
         m, out = self.run_method("vcd")
-        self.assertEqual(out.extra["noise_step"], 500)
-        self.assertEqual(m.describe()["noise_step"], 500)
+        self.assertEqual(out.extra["variant"], "vcd")
+        self.assertEqual(m.describe()["fusion"], "contrastive")
+        self.assertNotIn("caveat", m.describe())
 
 
 class TestDiagnostics(_Base):
@@ -439,3 +464,302 @@ class TestSystemPrompt(_Base):
 
         with self.assertRaises(ValueError):
             render_full_prompt("q", "helpful_assistant")
+
+
+# --------------------------------------------------------------------------- #
+# the compared baselines: is the contrastive rule actually the one deciding?
+# --------------------------------------------------------------------------- #
+class TwoBranchModel:
+    """Returns one fixed logit vector for the clean branch and another for the
+    negative branch, so the decided token identifies the decoding rule.
+
+    The prefill logits are chosen in :class:`TestContrastiveDecoding` so that
+    ``argmax`` differs between the observational logits, Fox's additive
+    fusion and the contrastive rule. Any single-branch or wrongly-fused
+    implementation therefore emits a different first token, rather than a
+    plausible-looking one.
+
+    Branch identification: a prefill call with two rows is the batched form
+    (row 0 clean, row 1 negative, as ``fox_generate`` builds it); two prefill
+    calls with one row each are the split form, in which the clean pass runs
+    first. Decode steps (``q == 1``) always return EOS so the loop stops after
+    the one token under test.
+    """
+
+    def __init__(self, z_obs: torch.Tensor, z_neg: torch.Tensor):
+        self.config = FakeConfig()
+        self.rows_seen: List[int] = []
+        self.pixel_rows_seen: List[int] = []
+        self.pixel_sums: List[float] = []
+        self.prefills = 0
+        self.z_obs = z_obs
+        self.z_neg = z_neg
+        self._p = torch.nn.Parameter(torch.zeros(1))
+
+    def parameters(self):
+        return iter([self._p])
+
+    def __call__(self, **kw: Any) -> FakeOutput:
+        ids = kw["input_ids"]
+        b, q = ids.shape
+        self.rows_seen.append(b)
+        px = kw.get("pixel_values")
+        if px is not None:
+            self.pixel_rows_seen.append(int(px.shape[0]))
+            self.pixel_sums.extend(
+                float(px[i].abs().sum()) for i in range(px.shape[0]))
+        logits = torch.zeros(b, q, VOCAB)
+        if q == 1:
+            logits[:, -1, :] = -20.0
+            logits[:, -1, EOS] = 20.0
+            return FakeOutput(logits, cache=object())
+        if b == 2:
+            logits[0, -1] = self.z_obs
+            logits[1, -1] = self.z_neg
+        else:
+            logits[0, -1] = self.z_obs if self.prefills == 0 else self.z_neg
+        self.prefills += 1
+        return FakeOutput(logits, cache=object())
+
+
+class TestContrastiveDecoding(unittest.TestCase):
+    """VCD and ICD must decide by ``(1+a) z_obs - a z_neg``, not by Fox's sum.
+
+    With these two vectors the three candidate rules disagree:
+
+    =========================  ===========================  ========
+    rule                       value at t10 / t11           argmax
+    =========================  ===========================  ========
+    observational only         2.0 / 1.9                    10
+    Fox additive (lambda > 0)  2.0 + l*5.0 / 1.9 + l*0.0    10
+    contrastive (a = 1)        -1.0 / 3.8                   11
+    =========================  ===========================  ========
+
+    So a first token of ``t11`` is only reachable through the contrastive
+    rule, and ``t10`` means the negative branch was ignored or added.
+    """
+
+    T_OBS, T_CD = 10, 11
+
+    def setUp(self) -> None:
+        import foxrepro.bench.methods as M
+        from foxrepro.fox import attention as A
+
+        z_obs = torch.full((VOCAB,), -5.0)
+        z_obs[self.T_OBS] = 2.0
+        z_obs[self.T_CD] = 1.9
+        z_neg = torch.full((VOCAB,), -5.0)
+        z_neg[self.T_OBS] = 5.0
+        z_neg[self.T_CD] = 0.0
+
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.sample = make_sample(Path(td.name))
+        self.model = TwoBranchModel(z_obs, z_neg)
+        self.processor = FakeProcessor()
+
+        orig_load = A.load_llava
+        A.load_llava = lambda *a, **k: (self.model, self.processor)  # type: ignore[assignment]
+        self.addCleanup(lambda: setattr(A, "load_llava", orig_load))
+
+        orig_encode = M._LlavaMethod._encode
+
+        def _encode(inner_self, sample, text):  # noqa: ANN001
+            return inner_self.processor(
+                images=None, text=text, return_tensors="pt")
+
+        M._LlavaMethod._encode = _encode  # type: ignore[assignment]
+        self.addCleanup(
+            lambda: setattr(M._LlavaMethod, "_encode", orig_encode))
+
+    def run_method(self, name: str, **over: Any):
+        cls = get_method(name)
+        m = cls(make_cfg(name, decoding="greedy", **over))
+        m.load()
+        out = m.generate(self.sample, "Is there a dog in the image?")
+        return m, out
+
+    def first_token(self, out: Any) -> str:
+        self.assertTrue(out.text, "the method emitted nothing")
+        return out.text.split()[0]
+
+    # -- the rule itself ---------------------------------------------------- #
+    def test_vcd_decides_by_the_contrastive_rule(self) -> None:
+        _, out = self.run_method("vcd")
+        self.assertEqual(self.first_token(out), f"t{self.T_CD}")
+
+    def test_icd_decides_by_the_contrastive_rule(self) -> None:
+        _, out = self.run_method("icd")
+        self.assertEqual(self.first_token(out), f"t{self.T_CD}")
+
+    def test_sid_decides_by_the_contrastive_rule(self) -> None:
+        """At SID's own cd_alpha = 0.5, 1.5*z_obs - 0.5*z_neg still flips."""
+        _, out = self.run_method("sid")
+        self.assertEqual(out.extra["cd_alpha"], 0.5)
+        self.assertEqual(self.first_token(out), f"t{self.T_CD}")
+
+    def test_fox_additive_fusion_decides_differently(self) -> None:
+        """The contrast that makes the two tests above meaningful.
+
+        Same model, same two branches, Fox's fusion: the observational token
+        wins. If this ever returned ``t11`` too, the tests above would be
+        passing for the wrong reason.
+        """
+        _, out = self.run_method("vcd_fox_fusion")
+        self.assertEqual(self.first_token(out), f"t{self.T_OBS}")
+
+    def test_sampling_sees_only_the_observational_branch(self) -> None:
+        _, out = self.run_method("sampling")
+        self.assertEqual(self.first_token(out), f"t{self.T_OBS}")
+
+    # -- what each branch is shown ------------------------------------------ #
+    def test_vcd_negative_branch_gets_a_corrupted_image(self) -> None:
+        """Same prompt, different pixels -- and the corruption must be real.
+
+        The stub image is all zeros, so the clean row sums to 0 and any
+        non-zero sum is noise that actually arrived.
+        """
+        self.run_method("vcd")
+        self.assertEqual(set(self.model.pixel_rows_seen), {2})
+        clean, noised = self.model.pixel_sums[0], self.model.pixel_sums[1]
+        self.assertEqual(clean, 0.0)
+        self.assertGreater(noised, 0.0)
+        self.assertEqual(len(set(self.processor.seen_text)), 1)
+
+    def test_icd_negative_branch_gets_the_disturbed_instruction(self) -> None:
+        m, _ = self.run_method("icd")
+        self.assertEqual(len(self.processor.seen_text), 2)
+        clean, disturbed = self.processor.seen_text
+        self.assertNotIn("confused object detector", clean)
+        self.assertEqual(disturbed, m.disturbed_prompt(
+            "Is there a dog in the image?"))
+        # verbatim from pope_eval.py:291-295: after the marker, one space
+        # either side, and the question still follows it
+        self.assertIn("<image> You are a confused object detector.", disturbed)
+        self.assertLess(
+            disturbed.index("confused object detector"),
+            disturbed.index("Is there a dog"),
+        )
+        # and the two branches differ only by that insertion
+        self.assertEqual(
+            disturbed.replace(" You are a confused object detector.", "", 1),
+            clean,
+        )
+
+    def test_icd_runs_two_prefills_one_row_each(self) -> None:
+        self.run_method("icd")
+        self.assertEqual(self.model.prefills, 2)
+        self.assertEqual(set(self.model.rows_seen), {1})
+
+    def test_vcd_runs_one_prefill_of_two_rows(self) -> None:
+        self.run_method("vcd")
+        self.assertEqual(self.model.prefills, 1)
+        self.assertEqual(set(self.model.rows_seen), {2})
+
+    def test_sid_shows_both_rows_the_same_image_and_prompt(self) -> None:
+        """CT2S is the whole perturbation; anything else would double up.
+
+        ``tests/test_attention_wiring.py`` proves the masking itself. Here
+        the point is the negative side of SID: no second encode, no noise,
+        one prompt, one image, two identical rows.
+        """
+        self.run_method("sid")
+        self.assertEqual(self.model.prefills, 1)
+        self.assertEqual(set(self.model.rows_seen), {2})
+        self.assertEqual(set(self.model.pixel_rows_seen), {2})
+        self.assertEqual(len(set(self.processor.seen_text)), 1)
+        self.assertEqual(self.model.pixel_sums, [0.0, 0.0])
+
+    def test_sid_records_its_ct2s_configuration(self) -> None:
+        m, out = self.run_method("sid")
+        self.assertEqual(out.extra["sid_agg_layer"], 2)
+        self.assertEqual(out.extra["sid_rank"], 100)
+        self.assertEqual(
+            m.describe()["resolved_hyperparameters"]["sid_rank"], 100)
+
+    def test_sid_refuses_to_stack_ct2s_on_an_external_perturbation(self) -> None:
+        """SID's own harness does stack them; no paper proposes it.
+
+        ``--use-vcd`` leaves ``--fast-v-attention-rank`` at 100, so that row
+        is VCD+CT2S. Reproducing it under either name would misattribute the
+        result, so the combination is refused here rather than offered.
+        """
+        from foxrepro.fox.attention import fox_generate
+
+        for extra in ({"pixel_values_do": torch.zeros(1, 3, 4, 4)},
+                      {"input_ids_do": torch.zeros(1, 4, dtype=torch.long)}):
+            with self.subTest(perturbation=sorted(extra)[0]):
+                with self.assertRaises(ValueError) as cm:
+                    fox_generate(
+                        self.model,
+                        self.processor(images=None, text="x"),
+                        max_new_tokens=1, sid=True, fusion="contrastive",
+                        mode="off", **extra,
+                    )
+                self.assertIn("CT2S", str(cm.exception))
+
+    # -- the hyperparameters that multiply the gap -------------------------- #
+    def test_cd_alpha_is_recorded_and_overridable(self) -> None:
+        m, out = self.run_method("vcd")
+        self.assertEqual(out.extra["cd_alpha"], 1.0)
+        self.assertAlmostEqual(out.extra["cd_beta"], 0.1)
+        m, out = self.run_method("vcd", alpha=0.5)
+        self.assertEqual(out.extra["cd_alpha"], 0.5)
+        self.assertEqual(
+            m.describe()["resolved_hyperparameters"]["cd_alpha"], 0.5)
+
+    def test_alpha_zero_collapses_to_the_baseline(self) -> None:
+        """a = 0 makes ``diffs == z_obs``; the negative branch stops mattering.
+
+        This is the sanity check that the coefficient is wired to the right
+        side of the subtraction -- with the sign flipped, a = 0 would still
+        change the answer.
+        """
+        _, out = self.run_method("vcd", alpha=0.0)
+        self.assertEqual(self.first_token(out), f"t{self.T_OBS}")
+
+    def test_the_intervention_stays_off(self) -> None:
+        """VCD and ICD are not Fox-with-a-different-negative-branch.
+
+        If the head edit were left on, these rows would measure Fox plus a
+        perturbation and the comparison table would be meaningless.
+        """
+        for arm in ("vcd", "icd"):
+            with self.subTest(arm=arm):
+                m, _ = self.run_method(arm)
+                d = m.describe()
+                self.assertEqual(d["fusion"], "contrastive")
+                self.assertEqual(d["mode"], "off")
+
+
+class TestUntrackedOverridesAreRefused(_Base):
+    """A hyperparameter the run filename cannot see must not be sweepable.
+
+    ``storage.VARIANT_FIELDS`` builds the run file name. ``noise_step``,
+    ``sid_rank`` and ``sid_agg_layer`` are not in it, so two runs differing
+    only in one of them would land in the same file and resume from each
+    other -- half one sweep point, half another, no error, plausible number.
+    The published value works; anything else raises.
+    """
+
+    CASES = (
+        ("vcd", "noise_step", 500, 300),
+        ("vcd_fox_fusion", "noise_step", 500, 300),
+        ("sid", "sid_rank", 100, 200),
+        ("sid", "sid_agg_layer", 2, 5),
+    )
+
+    def test_the_published_value_is_accepted_explicitly(self) -> None:
+        for name, key, default, _ in self.CASES:
+            with self.subTest(method=name, key=key):
+                m, _ = self.run_method(name, extra={key: default})
+                self.assertIsNotNone(m)
+
+    def test_any_other_value_raises_and_names_variant_fields(self) -> None:
+        for name, key, _, other in self.CASES:
+            with self.subTest(method=name, key=key):
+                with self.assertRaises(ValueError) as cm:
+                    self.run_method(name, extra={key: other})
+                msg = str(cm.exception)
+                self.assertIn("VARIANT_FIELDS", msg)
+                self.assertIn(key, msg)

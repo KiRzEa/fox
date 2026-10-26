@@ -59,9 +59,37 @@ __all__ = [
     "parse_yes_no", "parse_yes_no_released", "POPE_PARSERS",
     "DEFAULT_POPE_PARSER", "read_run", "evaluate_pope", "evaluate_chair",
     "evaluate_run_file", "PopeOutcome",
+    "LEGACY_METHOD_NAMES", "canonical_method",
 ]
 
 _WORD_RE = re.compile(r"[a-z]+")
+
+#: ``(recorded method, recorded variant) -> what that arm is now called``.
+#:
+#: Rounds 1-5 ran one compared-method arm under the name ``vcd``. It was never
+#: VCD: it put VCD's noised image into **Fox's** additive gated fusion, and the
+#: records say so in ``method_extra.variant``. Now that VCD's own contrastive
+#: rule is implemented, ``vcd`` means VCD, and leaving the old files answering
+#: to that name would put the hybrid into the VCD row of Table 1 -- a wrong
+#: number under a real method's name, which is worse than a missing row.
+#:
+#: Keyed on the variant rather than on the file or the date, because the
+#: variant is what the run itself recorded about what it computed.
+LEGACY_METHOD_NAMES: Dict[Tuple[str, str], str] = {
+    ("vcd", "vcd-noise-fox-fusion"): "vcd_fox_fusion",
+}
+
+
+def canonical_method(method: Any, variants: Sequence[str]) -> Any:
+    """Today's name for an arm, given what the run recorded about itself.
+
+    Returns ``method`` unchanged unless the run carries exactly one variant
+    and that pair has been renamed. A run with two variants is already a
+    mixed file and is refused upstream by the ``shared_keys`` check.
+    """
+    if len(variants) != 1 or not isinstance(method, str):
+        return method
+    return LEGACY_METHOD_NAMES.get((method, variants[0]), method)
 
 
 # --------------------------------------------------------------------------- #
@@ -201,6 +229,14 @@ def read_run(path: Path, strict: bool = True) -> Tuple[List[Dict[str, Any]], Dic
     )
     #: Recorded, allowed to vary across a resumed run, surfaced for audit.
     multi_keys = ("commit_hash", "transformers_path")
+    # The variant label travels with the records, so a relabelled method can
+    # still be recognised in files written before the rename -- see
+    # LEGACY_METHOD_NAMES below.
+    variants = sorted({
+        str((r.get("method_extra") or {}).get("variant"))
+        for r in records
+        if (r.get("method_extra") or {}).get("variant") is not None
+    })
     meta: Dict[str, Any] = {"run_file": str(path)}
     for key in multi_keys:
         seen = sorted({str(r.get(key)) for r in records if r.get(key) is not None})
@@ -219,6 +255,9 @@ def read_run(path: Path, strict: bool = True) -> Tuple[List[Dict[str, Any]], Dic
             )
         else:
             meta[key] = sorted(json.loads(v) for v in values)  # type: ignore[arg-type]
+    if variants:
+        meta["method_variant"] = variants[0] if len(variants) == 1 else variants
+    meta["method"] = canonical_method(meta.get("method"), variants)
     meta["n_records"] = len(records)
     meta["n_duplicate_sample_ids"] = n_dupes
     meta["trailing_partial_bytes"] = partial_bytes

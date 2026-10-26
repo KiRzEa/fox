@@ -126,12 +126,41 @@ class FoxState:
     # ---- which batch rows get the intervention ----
     branch_rows: Optional[torch.Tensor] = None
 
+    # ---- SID / CT2S: vision-key masking on the negative branch ----
+    # A different intervention on a different tensor: Fox edits pre-softmax
+    # logits per head, CT2S makes whole vision keys unattendable for every
+    # head. They are never on together -- SID is a compared baseline, and it
+    # runs with Fox's mode="off".
+    sid_enabled: bool = False
+    sid_agg_layer: int = 2
+    sid_rank: int = 100
+    #: Rows the mask applies to. None would mean "all rows", which for the
+    #: batched dual pass would prune the clean branch too.
+    sid_rows: Optional[torch.Tensor] = None
+    #: Refilled at layer ``sid_agg_layer - 1`` of every forward, and cleared
+    #: by the decode loop before each one. ``None`` at a layer that needs it
+    #: is an error, not a reason to skip the mask -- see _sid_dropped.
+    sid_keep: Optional[torch.Tensor] = None
+
     # ---- readouts, refilled every forward ----
     collect: bool = True
     diagnostics: Dict[int, Dict[str, torch.Tensor]] = field(default_factory=dict)
 
     def reset_diagnostics(self) -> None:
         self.diagnostics.clear()
+
+    def sid_read_row(self) -> int:
+        """Which row's layer-(agg-1) attention the ranking is read from.
+
+        The released code reads batch element 0 of its own negative forward,
+        which is the negative branch. Here the two branches are rows of one
+        pass, so it is the first pruned row. Up to ``sid_agg_layer`` the two
+        rows are identical anyway -- nothing has happened to either yet -- so
+        this only matters if the rows ever stop sharing a prompt.
+        """
+        if self.sid_rows is None or self.sid_rows.numel() == 0:
+            return 0
+        return int(self.sid_rows[0])
 
     def span_is_set(self) -> bool:
         return self.img_start >= 0 and self.img_end >= self.img_start
@@ -167,6 +196,61 @@ def _repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
     return x[:, :, None].expand(b, n_kv, n_rep, s, d).reshape(b, n_kv * n_rep, s, d)
 
 
+def _sid_dropped(n_keys: int, device: Any) -> torch.Tensor:
+    """Which keys CT2S makes unattendable, for a forward whose ranking is in.
+
+    Raises rather than returning an empty mask when the ranking is missing:
+    a silently unpruned negative branch makes SID identical to the baseline
+    with twice the compute, and the run would look finished and be wrong.
+    """
+    from foxrepro.fox.kernel import ct2s_dropped_keys
+
+    if FOX.sid_keep is None:
+        raise RuntimeError(
+            f"CT2S reached layer >= {FOX.sid_agg_layer} with no keep-set. "
+            f"Layer {FOX.sid_agg_layer - 1} must run through this attention "
+            "function to read the ranking. Every layer goes through it when "
+            "the model is loaded with attn_implementation='fox', so seeing "
+            "this means the image span was not set at that layer."
+        )
+    return ct2s_dropped_keys(
+        FOX.sid_keep, FOX.img_start, FOX.img_end, n_keys, device)
+
+
+def _sid_read_ranking(
+    module: Any,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    attention_mask: Optional[torch.Tensor],
+    scaling: float,
+) -> None:
+    """Record CT2S's keep-set from this layer's attention, changing nothing.
+
+    Only the last query row is needed, and softmax is row-independent, so
+    this computes ``q[-1] @ K.T`` rather than the full ``[B, H, Q, K]``
+    matrix: identical values, and it does not have to materialise 93 MB per
+    branch at prefill. The caller then hands the layer to SDPA untouched, so
+    every one of the 32 layers stays bit-for-bit the stock path and the only
+    thing this arm changes is which keys are visible.
+    """
+    from foxrepro.fox.kernel import ct2s_keep
+
+    n_rep = getattr(module, "num_key_value_groups", 1)
+    k_states = _repeat_kv(key, n_rep)
+    q_last = query[:, :, -1:, :]
+    logits = torch.matmul(q_last, k_states.transpose(2, 3)) * scaling
+    if attention_mask is not None:
+        logits = logits + attention_mask[..., -1:, : k_states.shape[-2]].to(
+            logits.dtype)
+    # fp32 accumulation then back to the model dtype: what eager LlamaAttention
+    # does, and the released mean-over-heads runs on the fp16 result.
+    probs = F.softmax(logits, dim=-1, dtype=torch.float32).to(query.dtype)
+    FOX.sid_keep = ct2s_keep(
+        probs, FOX.img_start, FOX.img_end,
+        rank=FOX.sid_rank, row=FOX.sid_read_row(),
+    )
+
+
 def fox_attention_forward(
     module: Any,
     query: torch.Tensor,
@@ -190,6 +274,34 @@ def fox_attention_forward(
     from transformers.integrations.sdpa_attention import sdpa_attention_forward
 
     layer_idx = getattr(module, "layer_idx", None)
+
+    if FOX.sid_enabled and layer_idx is not None and FOX.span_is_set():
+        agg = FOX.sid_agg_layer
+        if layer_idx == agg - 1:
+            _sid_read_ranking(module, query, key, attention_mask, scaling
+                              if scaling is not None
+                              else float(module.head_dim) ** -0.5)
+        elif layer_idx >= agg:
+            n_keys = key.shape[-2]
+            drop = _sid_dropped(n_keys, key.device)
+            rows = FOX.sid_rows
+            if attention_mask is None:
+                raise RuntimeError(
+                    "CT2S needs an explicit additive attention mask to write "
+                    "into; register() installs eager_mask so that this is "
+                    "never None. Seeing None here means the mask builder was "
+                    "not registered, which also means causality is gone."
+                )
+            m = attention_mask[..., :n_keys]
+            m = m.expand(query.shape[0], -1, -1, -1).clone()
+            fill = torch.finfo(m.dtype).min
+            if rows is None:
+                m = m.masked_fill(drop.view(1, 1, 1, -1), fill)
+            else:
+                m[rows] = m[rows].masked_fill(drop.view(1, 1, 1, -1), fill)
+            attention_mask = m
+        # The layer itself is never altered: fall through to the untouched
+        # path below with (possibly) a narrower mask.
 
     if (
         not FOX.enabled
@@ -568,6 +680,14 @@ def fox_generate(
     collect_trace: bool = False,
     single_branch: bool = False,
     pixel_values_do: Optional[torch.Tensor] = None,
+    fusion: str = "fox_additive",
+    cd_alpha: float = 1.0,
+    cd_beta: float = 0.1,
+    input_ids_do: Optional[torch.Tensor] = None,
+    attn_mask_do: Optional[torch.Tensor] = None,
+    sid: bool = False,
+    sid_agg_layer: int = 2,
+    sid_rank: int = 100,
 ) -> Dict[str, Any]:
     """Generate with Fox: both branches batched, fused per token.
 
@@ -585,9 +705,31 @@ def fox_generate(
     z_do`` -- and which the paper never ran. Both are needed and they answer
     different questions.
 
-    ``pixel_values_do`` supplies a different image to the interventional row,
-    which is how VCD works: its second branch sees a diffusion-noised image.
-    Leave it ``None`` for Fox, where both rows see the same image.
+    ``fusion`` selects how the two branches combine, and the two options are
+    not variants of one another:
+
+    * ``"fox_additive"`` -- ``z_obs + lambda * z_do``, conflict-gated. Fox.
+      Amplifies where the branches AGREE.
+    * ``"contrastive"`` -- ``(1 + cd_alpha) * z_obs - cd_alpha * z_do``, the
+      rule VCD, ICD and SID share. Amplifies where they DISAGREE.
+
+    How the negative branch is built is then a separate axis, and the three
+    compared baselines differ only along it:
+
+    * ``pixel_values_do`` -- a different image. VCD noises it.
+    * ``input_ids_do`` / ``attn_mask_do`` -- a different token sequence. ICD
+      inserts a negative role description after the image marker.
+    * ``sid`` -- the same image and the same prompt, read through CT2S: the
+      100 vision keys the model attends to least are the only ones left
+      visible from layer ``sid_agg_layer`` onward. SID perturbs nothing
+      outside the model, which is why its negative branch costs one forward
+      and no preprocessing.
+
+    When ``input_ids_do`` is given the two branches cannot be batched: their
+    sequences differ in length and content, so position ids and the cache
+    would have to be reconciled by padding. They are run as two passes with
+    two caches instead, which is also what the released code does. Fox and
+    VCD keep the batched path, where both rows share one token sequence.
 
     ``generate()`` cannot express this -- it would sample the two rows
     independently rather than fusing their logits -- so the loop is explicit.
@@ -605,7 +747,36 @@ def fox_generate(
     Returns ``{"token_ids", "text"?, "n_prompt_tokens", "n_gen_tokens",
     "trace"?}``.
     """
-    from foxrepro.fox.kernel import fuse, jsd
+    from foxrepro.fox.kernel import contrastive_fuse, fuse, jsd
+
+    if fusion not in ("fox_additive", "contrastive"):
+        raise ValueError(
+            f"fusion must be 'fox_additive' or 'contrastive', got {fusion!r}"
+        )
+    if input_ids_do is not None and pixel_values_do is not None:
+        raise ValueError(
+            "input_ids_do and pixel_values_do perturb different things; "
+            "running both at once is not any published method"
+        )
+    if sid and (input_ids_do is not None or pixel_values_do is not None):
+        # SID's own repo *does* stack these: `--use-vcd` leaves
+        # --fast-v-attention-rank at 100, so its VCD row is VCD+CT2S
+        # (vcd_sample.py:141, reached for any images_cd). That is a bug in
+        # the harness, not a method, and reproducing it under the name of
+        # either paper would misattribute whatever it measures.
+        raise ValueError(
+            "sid=True with an external perturbation stacks CT2S on top of "
+            "VCD or ICD. No paper proposes that; run them separately"
+        )
+    if sid and single_branch:
+        raise ValueError("sid=True needs the negative branch; not single_branch")
+    if sid and sid_agg_layer < 1:
+        raise ValueError(
+            f"sid_agg_layer must be >= 1 (the ranking is read from the layer "
+            f"below it), got {sid_agg_layer}"
+        )
+    #: ICD's branch has its own token sequence, so it needs its own pass.
+    split_pass = input_ids_do is not None and not single_branch
 
     device = next(model.parameters()).device
     image_token_id = model.config.image_token_index
@@ -627,10 +798,12 @@ def fox_generate(
     # Row 0 observational, row 1 interventional: identical token sequences, so
     # batching them is exact, and decode reads the weights once instead of
     # twice. The released code runs two sequential passes.
-    n_rows = 1 if single_branch else 2
+    n_rows = 1 if (single_branch or split_pass) else 2
     ids2 = input_ids.repeat(n_rows, 1)
     mask2 = attn_mask.repeat(n_rows, 1)
-    if single_branch:
+    if single_branch or split_pass:
+        # split_pass runs one row per forward, so the image must not be
+        # doubled here: ids2 has one row and the shapes have to agree.
         px2 = pixel_values
     elif pixel_values_do is not None:
         # VCD: row 0 sees the clean image, row 1 the corrupted one.
@@ -638,9 +811,17 @@ def fox_generate(
     else:
         px2 = pixel_values.repeat(2, *([1] * (pixel_values.dim() - 1)))
 
+    if split_pass:
+        ids_do = input_ids_do.to(device)
+        mask_do = (attn_mask_do if attn_mask_do is not None
+                   else torch.ones_like(ids_do)).to(device)
+        px_do = pixel_values
+
     out_ids: List[int] = []
     trace: List[Dict[str, float]] = []
+    sid_kept: List[int] = []
     cache = None
+    cache_do = None
 
     with FOX.configured(
         enabled=not single_branch, mode=mode, gamma=gamma, ratio=ratio,
@@ -649,9 +830,17 @@ def fox_generate(
         branch_rows=torch.tensor([1], device=device),
         eager_layers=eager_layers if eager_layers is not None else FOX.eager_layers,
         generator=gen,
+        sid_enabled=sid, sid_agg_layer=sid_agg_layer, sid_rank=sid_rank,
+        sid_rows=torch.tensor([1], device=device) if sid else None,
+        sid_keep=None,
     ):
         for step in range(max_new_tokens):
             FOX.reset_diagnostics()
+            # The released code recomputes the keep-set from the current last
+            # query at every forward, so it is per-step state, not per-prompt.
+            # Clearing it here is what makes a missed read raise instead of
+            # silently reusing the previous token's ranking.
+            FOX.sid_keep = None
             if step == 0:
                 out = model(
                     input_ids=ids2, attention_mask=mask2, pixel_values=px2,
@@ -663,7 +852,30 @@ def fox_generate(
                     past_key_values=cache, use_cache=True,
                 )
             cache = out.past_key_values
+            if sid:
+                # Recorded per step because the ranking is recomputed per
+                # step: a run whose keep count drifts from sid_rank has hit
+                # the n_keys clamp and is not the configured method.
+                sid_kept.append(
+                    0 if FOX.sid_keep is None else int(FOX.sid_keep.numel()))
             z_obs = out.logits[0, -1].float().unsqueeze(0)
+
+            if split_pass:
+                # ICD: the negative branch has its own prompt, so its own
+                # pass and its own cache. The intervention is OFF for it --
+                # the perturbation IS the instruction, not an attention edit.
+                if step == 0:
+                    out_do = model(
+                        input_ids=ids_do, attention_mask=mask_do,
+                        pixel_values=px_do, use_cache=True,
+                    )
+                else:
+                    out_do = model(
+                        input_ids=ids_do[:, -1:], attention_mask=mask_do,
+                        past_key_values=cache_do, use_cache=True,
+                    )
+                cache_do = out_do.past_key_values
+                z_do = out_do.logits[0, -1].float().unsqueeze(0)
 
             if single_branch:
                 # No second branch, no fusion: this IS the baseline. Sampling
@@ -673,18 +885,34 @@ def fox_generate(
                 fused = masked = z_obs
                 decision = z_obs
             else:
-                z_do = out.logits[1, -1].float().unsqueeze(0)
-                if mode == "off":
-                    # The fusion still runs. This arm isolates the additive
-                    # logit fusion from the intervention -- the control the
-                    # paper never ran.
-                    d_t = torch.zeros(1, device=z_obs.device, dtype=torch.float64)
+                if not split_pass:
+                    z_do = out.logits[1, -1].float().unsqueeze(0)
+                if fusion == "contrastive":
+                    # VCD / ICD / SID. A fixed subtraction, no JSD gate, so
+                    # d_t stays 0 and lambda records -cd_alpha -- the trace
+                    # keeps one schema across every arm rather than growing a
+                    # second shape that every consumer must branch on.
+                    d_t = torch.zeros(1, device=z_obs.device,
+                                      dtype=torch.float64)
+                    lam = torch.full((1,), -float(cd_alpha),
+                                     device=z_obs.device)
+                    fused, masked = contrastive_fuse(
+                        z_obs, z_do, cd_alpha=cd_alpha, cd_beta=cd_beta
+                    )
+                    decision = fused if (greedy and not mask_greedy) else masked
                 else:
-                    d_t = jsd(z_obs, z_do)
-                fused, masked, lam = fuse(
-                    z_obs, z_do, d_t, alpha=alpha, tau_js=tau_js, beta=beta
-                )
-                decision = fused if (greedy and not mask_greedy) else masked
+                    if mode == "off":
+                        # The fusion still runs. This arm isolates the
+                        # additive logit fusion from the intervention -- the
+                        # control the paper never ran.
+                        d_t = torch.zeros(1, device=z_obs.device,
+                                          dtype=torch.float64)
+                    else:
+                        d_t = jsd(z_obs, z_do)
+                    fused, masked, lam = fuse(
+                        z_obs, z_do, d_t, alpha=alpha, tau_js=tau_js, beta=beta
+                    )
+                    decision = fused if (greedy and not mask_greedy) else masked
             nxt = _sample_from(
                 decision[0], top_p=top_p, temperature=temperature,
                 greedy=greedy, generator=gen,
@@ -704,6 +932,13 @@ def fox_generate(
             nxt2 = nxt.view(1, 1).repeat(n_rows, 1).to(device)
             ids2 = torch.cat([ids2, nxt2], dim=1)
             mask2 = torch.cat([mask2, mask2.new_ones(n_rows, 1)], dim=1)
+            if split_pass:
+                # The negative branch generates the SAME token: both branches
+                # must condition on the text actually emitted, or the contrast
+                # after step 1 is between two different continuations rather
+                # than between two readings of one.
+                ids_do = torch.cat([ids_do, nxt.view(1, 1).to(device)], dim=1)
+                mask_do = torch.cat([mask_do, mask_do.new_ones(1, 1)], dim=1)
 
     result: Dict[str, Any] = {
         "token_ids": out_ids,
@@ -713,4 +948,6 @@ def fox_generate(
     }
     if collect_trace:
         result["trace"] = trace
+    if sid:
+        result["sid_n_kept"] = sid_kept
     return result

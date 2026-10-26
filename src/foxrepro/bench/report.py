@@ -328,12 +328,18 @@ def reference_seed(results: Sequence[RunResult]) -> Optional[int]:
 
 
 def bare_arms(results: Sequence[RunResult]) -> List[RunResult]:
-    """Only the arms the paper also prints: a method with no modifiers.
+    """Only unmodified method arms: a method name with no flags after it.
 
-    The paper-comparison tables put our cell next to theirs, so they may hold
-    only arms that have a counterpart there. ``fox --mode ulp_control`` and
-    ``fox --logit-dtype bf16`` are this repo's own, and they appear in the
+    The paper-comparison tables put our cell next to theirs, so they hold
+    only arms that could have a counterpart there. ``fox --mode ulp_control``
+    and ``fox --logit-dtype bf16`` are this repo's own, and they appear in the
     across-seed section instead, where each gets its own row and interval.
+
+    One arm survives this filter without a paper counterpart:
+    ``vcd_fox_fusion``, which is a method in its own right (VCD's negative
+    branch in Fox's fusion) that no paper prints. Its paper column comes back
+    empty from :func:`paper_gap`, which is the correct reading -- there is
+    nothing there to compare it to.
     """
     return [r for r in results if " " not in r.arm]
 

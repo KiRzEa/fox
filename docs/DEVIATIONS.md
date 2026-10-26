@@ -401,7 +401,7 @@ annotation files, so there is no equivalent degree of freedom.
 
 Reproduce with `scripts/chair_image_set_sensitivity.py`.
 
-### 3.9 Why only `sampling` and `fox` are re-run
+### 3.9 Why only `sampling` and `fox` were re-run (superseded by 3.12)
 
 The paper's tables carry eight rows. This project runs two of them, and the
 reason is not cost.
@@ -435,17 +435,100 @@ The one exception is **CausalMM**, which appears nowhere in the released
 repository and cannot be run from it. Whether its row was re-run elsewhere or
 taken from its own paper is not determinable from what was published.
 
-**Re-running them is also not available to us.** ICD, SID, OPERA and CausalMM
-each need their own codebase; what this repo can run is VCD's noised branch
-inside Fox's fusion, which is not VCD (see the VCD-noise note above). So
-"reproduce the baselines too" would be three or four separate reproductions,
-each answering a question this project is not asking.
+**Superseded, 2026-10-27.** Three of the six are now implemented and run as
+themselves — see §3.12. What is left is OPERA (its own beam search with
+rollback, and it cannot share the nucleus-sampling protocol) and CausalMM
+(absent from every released repository).
 
 Worth recording for the write-up: VCD's paper reports a standard deviation
 beside every number (`83.29(±0.35)`). Fox claims "a two-sided t-test
 (p < 0.05)" over "10 independent runs" (C.2) and prints variance nowhere. A
 paper in the same line of work, three years earlier, met the reporting
 standard this one skips.
+
+### 3.12 Three of the compared methods, implemented as themselves
+
+§3.9 said the compared rows were out of reach. Three of them are not, and
+they are now in the plan as `vcd`, `icd` and `sid`. The source is
+[huofushuo/SID](https://github.com/huofushuo/SID) — the unmodified parent of
+the Fox fork, which is where all three live in one harness
+(`vcd_sample.py`, `pope_eval.py`, `minigpt4/models/modeling_llama.py`).
+Every number-bearing line is transcribed verbatim into
+`src/foxrepro/fox/reference.py` and the clean port is asserted bit-identical
+in `tests/test_kernel_equivalence.py`.
+
+**One decoding rule, three negative branches.** This is the structural fact
+worth having, and it is not visible from the papers:
+
+```
+diffs  = (1 + a) * z_obs - a * z_cd           # a SUBTRACTION
+cutoff = log(b) + z_obs.max()
+cd_logits = diffs.masked_fill(z_obs < cutoff, -inf)
+```
+
+| arm | negative branch | `cd_alpha` | extra forward |
+|---|---|---|---|
+| `vcd` | diffusion-noised image, step 500 | 1.0 | batched row |
+| `icd` | `"You are a confused object detector."` after `<image>` | 1.0 | separate pass |
+| `sid` | same image, read through CT2S | 0.5 | batched row |
+
+Fox's fusion is `z_obs + lambda_t * z_do` — an **addition**, gated to fire
+where the branches agree. These three subtract, to fire where they disagree.
+Both are called "contrastive decoding" in the literature; they are opposite
+operations, and the pair (`vcd`, `vcd_fox_fusion`) now isolates exactly that
+difference at a fixed negative branch, which neither paper ran.
+
+**What CT2S actually does** (`modeling_llama.py`, the `elif USE_FAST_V`
+branch). At layer 2, read layer **1**'s attention, average over heads, take
+the last query row, slice the 576 vision keys, and keep the 100 the model
+attends to **least** (`topk(100, largest=False)`); every other vision key is
+unattendable from layer 2 onward. Nothing is removed — it is a key mask, so
+position ids and the KV cache keep their full length. The ranking is
+recomputed at every forward, so it is per-token state.
+
+Three ways to get this wrong, each of which still produces numbers:
+
+1. `largest=True` is the line directly above, commented out. That is FastV,
+   a compute optimisation that keeps the *most*-attended tokens. SID inverts
+   it on purpose: the negative branch is made to read the image badly.
+   Keeping the top 100 would build a *better* branch and subtract the wrong
+   thing.
+2. The ranking comes from layer `agg_layer - 1`, not `agg_layer`
+   (`last_layer_attention = layer_outputs[1]` is the previous iteration's).
+3. The negative branch sees the **same image and the same prompt**.
+   `pope_eval.py` sets `image_cd = image` under its default `--use-cd`. CT2S
+   is the entire perturbation, which is what makes SID cheap and what makes
+   "self-introspective" literal.
+
+**Two defects in the released harness that we do not reproduce.**
+
+* `--use-cd` defaults True and is tested before `--use-vcd`, and both are
+  `action='store_true'`, so **SID's repo as shipped cannot run VCD at all**
+  without editing the file.
+* If it could, it would not be VCD: `use_cd` is true for any `images_cd`, and
+  that path switches CT2S on whenever `--fast-v-attention-rank` is set — which
+  it is, to 100, by default. So `--use-vcd` would run VCD **plus** CT2S.
+  `fox_generate` raises on that combination rather than offering it; no paper
+  proposes it, and a number from it belongs to neither.
+
+**One deviation of ours.** The two branches are batched as rows of one
+forward where their token sequences allow it (`vcd`, `sid`), as elsewhere in
+this repo (§3.4). ICD cannot: its negative prompt is longer, so it runs two
+passes with two caches, which is what the release does for all three.
+
+**Greedy is the released default.** `--sample-greedy` defaults True, and that
+path argmaxes the **unmasked** `diffs` — bypassing the beta cutoff *and* the
+temperature/top-p warpers, which are applied only to `cd_logits`. So the
+published POPE numbers for these methods are greedy whatever `--sample` says.
+The plan runs both (`table1_methods`/`table2_methods` under sampling,
+`table9_methods` under greedy) and both are reported.
+
+**Relabelling the old arm.** Rounds 1–5 ran one arm called `vcd` that was
+VCD's noise inside Fox's fusion. `vcd` now means VCD, so the six archived
+files are relabelled `vcd_fox_fusion` on read, keyed on the
+`method_extra.variant` the records themselves carry
+(`evaluate.LEGACY_METHOD_NAMES`). The files are not edited; the numbers are
+unchanged and were always labelled correctly inside.
 
 ### 3.6 Hyperparameter defaults come from the code, not the paper
 

@@ -89,7 +89,7 @@ from foxrepro.data.loaders import DEFAULT_TEMPLATE_IDS
 __all__ = [
     "Job", "PLAN", "measured_cost", "scan_progress", "next_jobs", "render_plan",
     "partition_jobs", "partition_by_priority", "pair_key",
-    "ingest_runs", "archive_runs",
+    "ingest_runs", "archive_runs", "DUAL_BRANCH", "SPLIT_BRANCH",
 ]
 
 #: Seconds per sample on 2x T4 with LLaVA-1.5-7B fp16 sharded. Measured, not
@@ -100,11 +100,18 @@ __all__ = [
 #: POPE is a 625-token prefill and 1 token out, so it is prefill-bound and the
 #: second branch roughly doubles it. CHAIR decodes ~120 tokens, and there the
 #: two branches batch, so dual costs well under 2x.
+#: ``split`` is the two-sequential-passes shape: ICD's negative branch has its
+#: own token sequence, so the rows cannot share a batch and the weights are
+#: read twice per token. Costed at 2x single on CHAIR rather than the batched
+#: dual's 1.33x. On POPE, which is prefill-bound, batching already buys little
+#: and the two shapes land in the same place.
 COST_S: Dict[Tuple[str, str], float] = {
     ("pope", "single"): 0.55,     # 27.3 min / 3000
     ("pope", "dual"): 1.10,       # 55.1 min / 3000
+    ("pope", "split"): 1.10,      # prefill-bound; batching saves nothing here
     ("chair", "single"): 8.2,     # 68.4 min / 500
     ("chair", "dual"): 10.9,      # 90.6 min / 500
+    ("chair", "split"): 16.4,     # estimated: 2x single, no batching to share
     ("diag", "single"): 0.55,     # one prefill, no generation
 }
 
@@ -116,8 +123,14 @@ N_SAMPLES: Dict[Tuple[str, str], int] = {
     **{("chair", d): 500 for d in CHAIR_DRAWS},
 }
 
-#: Methods that run two forward branches per token.
-DUAL_BRANCH = frozenset({"fox", "vcd"})
+#: Methods that run two forward branches per token as rows of one batch.
+#: ``mode="off"`` does NOT take a method out of this set: it disables the head
+#: edit and keeps the second branch, which is the point of that control.
+DUAL_BRANCH = frozenset({"fox", "vcd", "sid", "vcd_fox_fusion"})
+
+#: Methods whose two branches cannot be batched, so the weights are read twice
+#: per token. ICD disturbs the instruction, so the sequences differ in length.
+SPLIT_BRANCH = frozenset({"icd"})
 
 
 @dataclass(frozen=True)
@@ -201,9 +214,9 @@ class Job:
 
     @property
     def branches(self) -> str:
-        return "dual" if self.method in DUAL_BRANCH and self.mode != "off" else (
-            "dual" if self.method in DUAL_BRANCH else "single"
-        )
+        if self.method in SPLIT_BRANCH:
+            return "split"
+        return "dual" if self.method in DUAL_BRANCH else "single"
 
     def est_seconds(self) -> float:
         return self.n_samples * COST_S.get(
@@ -472,15 +485,74 @@ def _build_plan() -> List[Job]:
                             mode="boost_visual", gamma=4.0, seed=seed,
                             note="amplify visual attention, delta=4, sampling"))
 
-    # ---- Tier 6: the VCD-noise arm --------------------------------------- #
-    # Labelled vcd-noise-fox-fusion, not VCD: what this repo can run is VCD's
-    # noised branch inside Fox's fusion, so its row cannot be put against the
-    # paper's VCD row however many seeds it gets. Three, and last.
+    # ---- Round 6: the compared methods, as themselves --------------------- #
+    # Tables 1, 2 and 8 put Fox against Sampling, VCD, ICD, OPERA, CausalMM and
+    # SID, and the paper re-ran all of them rather than quoting prior numbers
+    # (its VCD row differs from VCD's own paper by up to 5.55 points and flips
+    # sign on one split). So these rows are reproducible in principle, and
+    # until they exist the only thing this project can say about Table 1 is
+    # whether OUR fox beats OUR sampling.
+    #
+    # Three of the six are implemented and verified against their released
+    # source (tests/test_kernel_equivalence.py, tests/test_attention_wiring.py):
+    #
+    #   vcd  Leng et al. 2024   negative branch = diffusion-noised image
+    #   icd  Wang et al. 2024   negative branch = disturbed instruction
+    #   sid  Huo et al. 2025    negative branch = the model's own worst read
+    #
+    # All three share one decoding rule, (1 + a) z_obs - a z_cd with the beta
+    # cutoff, and differ only in how the negative branch is built -- so a bug
+    # in the rule would move all three together and a bug in one branch would
+    # move one. That is worth more than any single row.
+    #
+    # Breadth seeds, not ten. The seed-level interval on POPE-adversarial is
+    # about +/-0.6 points at n=3, which is well inside the 4-10 point gaps
+    # these rows are being read for, and ten seeds for three methods on both
+    # benchmarks would cost 80 h to refine a comparison against a number we
+    # cannot pair with anyway (the paper's own run is not ours).
+    #
+    # Their own `target`, not table1/table2, so they form their own pair_key
+    # groups. Sharing the headline target would graft them onto Tier 2's
+    # groups and hand them Tier 2's priority -- and would put five methods in
+    # one indivisible group, which on CHAIR is 7.9 h of a 9 h session. The
+    # baseline they are read against is `sampling` at the same seed, which is
+    # already archived for 42/43/44, so nothing here needs it in-session.
+    # Grouping the three TOGETHER is the useful pairing: they share the
+    # decoding rule, so a bug in it moves all three and a bug in one negative
+    # branch moves one.
     for seed in SEEDS_BREADTH:
-        jobs.append(Job("table1", "vcd", "pope", "adversarial", seed=seed,
-                        note="VCD-noise arm, not VCD proper"))
-        jobs.append(Job("table2", "vcd", "chair", "val2014_500", seed=seed,
-                        note="VCD-noise arm, not VCD proper"))
+        for method in ("vcd", "icd", "sid"):
+            jobs.append(Job("table1_methods", method, "pope", "adversarial",
+                            seed=seed,
+                            note="compared baseline, own decoding rule"))
+            jobs.append(Job("table2_methods", method, "chair", "val2014_500",
+                            seed=seed,
+                            note="compared baseline, own decoding rule"))
+
+    # The released harnesses argmax the UNMASKED fused logits whenever
+    # --sample-greedy is set, and SID ships with it True -- so SID's published
+    # POPE numbers are greedy whatever --sample says. One greedy run per
+    # method makes that comparable instead of assumed, and costs one seed.
+    for method in ("vcd", "icd", "sid"):
+        for bench, split in (("pope", "adversarial"), ("chair", "val2014_500")):
+            jobs.append(Job("table9_methods", method, bench, split,
+                            decoding="greedy",
+                            note="released --sample-greedy default"))
+
+    # ---- Tier 6: the VCD-noise arm --------------------------------------- #
+    # Not VCD: VCD's noised branch inside FOX's additive fusion. It ran in
+    # rounds 1-5 under the name `vcd`, which now means VCD proper, so the
+    # archived files are relabelled on read by
+    # evaluate.LEGACY_METHOD_NAMES. Kept in the plan because its three seeds
+    # exist and because the pair (vcd, vcd_fox_fusion) isolates the fusion
+    # rule at a fixed negative branch -- the one thing neither paper ran.
+    for seed in SEEDS_BREADTH:
+        jobs.append(Job("table1_methods", "vcd_fox_fusion", "pope",
+                        "adversarial", seed=seed,
+                        note="VCD's noise in Fox's fusion"))
+        jobs.append(Job("table2_methods", "vcd_fox_fusion", "chair",
+                        "val2014_500", seed=seed,
+                        note="VCD's noise in Fox's fusion"))
 
     return jobs
 
@@ -926,9 +998,10 @@ def measured_cost(runs_root: Optional[Path] = None) -> Dict[str, float]:
                 if not isinstance(lat, (int, float)):
                     continue
                 bench = rec.get("benchmark", "?")
+                m = rec.get("method")
                 branches = (
-                    "dual"
-                    if rec.get("method") in DUAL_BRANCH and rec.get("mode") != "off"
+                    "split" if m in SPLIT_BRANCH
+                    else "dual" if m in DUAL_BRANCH
                     else "single"
                 )
                 buckets.setdefault((bench, branches), []).append(lat / 1000.0)

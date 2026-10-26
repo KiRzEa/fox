@@ -798,3 +798,70 @@ class TestResumeAcrossCommits(unittest.TestCase):
                                  self._rec("q1", **{field: value})])
                 with self.assertRaises(ValueError):
                     read_run(p, strict=True)
+
+
+class TestLegacyMethodRelabelling(TestResumeAcrossCommits):
+    """``vcd`` meant the Fox-fusion hybrid in rounds 1-5. Now it means VCD.
+
+    Six archived run files were written under the old meaning. If they keep
+    answering to ``vcd``, the hybrid lands in the VCD row of Table 1 -- a
+    wrong number under a real method's name, which is worse than a missing
+    row. The records say what they computed in
+    ``method_extra.variant``, so the relabel is keyed on that rather than on
+    the filename or the date.
+
+    Inherits the record fixture from :class:`TestResumeAcrossCommits`.
+    """
+
+    def _vcd(self, sid: str, variant: str, **over):
+        return self._rec(
+            sid, method="vcd", method_extra={"variant": variant}, **over)
+
+    def test_the_hybrid_is_relabelled(self) -> None:
+        from foxrepro.bench.evaluate import read_run
+
+        p = self._write([self._vcd(f"q{i}", "vcd-noise-fox-fusion")
+                         for i in range(3)])
+        _, meta = read_run(p, strict=True)
+        self.assertEqual(meta["method"], "vcd_fox_fusion")
+        self.assertEqual(meta["method_variant"], "vcd-noise-fox-fusion")
+
+    def test_real_vcd_keeps_its_name(self) -> None:
+        from foxrepro.bench.evaluate import read_run
+
+        p = self._write([self._vcd(f"q{i}", "vcd") for i in range(3)])
+        _, meta = read_run(p, strict=True)
+        self.assertEqual(meta["method"], "vcd")
+
+    def test_a_run_with_no_variant_is_untouched(self) -> None:
+        from foxrepro.bench.evaluate import read_run
+
+        _, meta = read_run(self._write([self._rec(f"q{i}") for i in range(3)]),
+                           strict=True)
+        self.assertEqual(meta["method"], "fox")
+        self.assertNotIn("method_variant", meta)
+
+    def test_the_archived_files_actually_relabel(self) -> None:
+        """Not a synthetic record: the six real files in results/runs/."""
+        import glob
+
+        from foxrepro.bench.evaluate import read_run
+
+        files = sorted(glob.glob("results/runs/m-vcd__*.jsonl"))
+        if not files:
+            self.skipTest("archive not present in this checkout")
+        self.assertEqual(len(files), 6)
+        for f in files:
+            with self.subTest(run=f):
+                _, meta = read_run(f, strict=True)
+                self.assertEqual(meta["method"], "vcd_fox_fusion")
+
+    def test_an_unrelabelled_pair_passes_through(self) -> None:
+        from foxrepro.bench.evaluate import canonical_method
+
+        self.assertEqual(canonical_method("icd", ["icd"]), "icd")
+        self.assertEqual(canonical_method("vcd", []), "vcd")
+        # two variants in one file is a mixed file; leave the name alone and
+        # let the shared_keys check be the one that refuses it
+        self.assertEqual(
+            canonical_method("vcd", ["vcd", "vcd-noise-fox-fusion"]), "vcd")

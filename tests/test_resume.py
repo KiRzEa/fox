@@ -365,19 +365,19 @@ class TestLimitAndRunKey(unittest.TestCase):
     def test_dtype_is_in_the_file_name(self) -> None:
         self.assertIn("dt-bf16", self._cfg(dtype="bf16").run_key().filename())
 
-    def test_remaining_stub_methods_fail_loudly(self) -> None:
-        """Only sid and opera are still stubs.
+    def test_remaining_stub_method_fails_loudly(self) -> None:
+        """Only opera is still a stub.
 
-        ``sampling``, ``fox`` and ``vcd`` are implemented in
+        Everything except OPERA is implemented in
         ``foxrepro.bench.methods`` and tested in ``tests/test_methods.py``
-        against a fake model, so they are deliberately absent here: calling
+        against a fake model, so those are deliberately absent here: calling
         ``load()`` on them would try to fetch a checkpoint.
 
-        SID needs its upstream repo (the Fox release ships only a FastV
-        skeleton, no reweighting), and OPERA is a beam-search method with
-        rollback whose reference implementation is its own transformers fork.
+        OPERA is a beam-search method with rollback whose reference
+        implementation is its own transformers fork, and it cannot share the
+        nucleus-sampling protocol the other arms are compared under.
         """
-        for name in ("sid", "opera"):
+        for name in ("opera",):
             with self.subTest(method=name):
                 method = get_method(name)(self._cfg(method=name))
                 with self.assertRaises(NotImplementedError):
@@ -386,7 +386,7 @@ class TestLimitAndRunKey(unittest.TestCase):
     def test_implemented_methods_are_not_stubs(self) -> None:
         from foxrepro.bench.generate import _NotImplementedMethod
 
-        for name in ("sampling", "fox", "vcd"):
+        for name in ("sampling", "fox", "vcd", "icd", "sid", "vcd_fox_fusion"):
             with self.subTest(method=name):
                 cls = get_method(name)
                 self.assertFalse(

@@ -1,0 +1,276 @@
+{
+ "117527": {
+  "file": "COCO_val2014_000000117527.jpg",
+  "pope": {
+   "random": {
+    "yes": [
+     "dining table",
+     "person",
+     "bowl"
+    ],
+    "no": [
+     "dog",
+     "banana",
+     "bicycle"
+    ]
+   },
+   "popular": {
+    "yes": [
+     "dining table",
+     "person",
+     "bowl"
+    ],
+    "no": [
+     "car",
+     "chair",
+     "bottle"
+    ]
+   },
+   "adversarial": {
+    "yes": [
+     "dining table",
+     "person",
+     "bowl"
+    ],
+    "no": [
+     "chair",
+     "car",
+     "spoon"
+    ]
+   }
+  },
+  "chair_ground_truth": [
+   "bowl",
+   "cup",
+   "dining table",
+   "person"
+  ],
+  "captions": {
+   "baseline": {
+    "text": "The image depicts a group of people gathered around a dining table, enjoying a meal together. There are at least nine people in the scene, with some sitting and others standing around the table. The table is filled with various food items, including a large bowl of food, multiple cups, and a few sandwiches.\n\nThe table is also set with a variety of utensils, such as forks, knives, and spoons. There are multiple bottles placed around the table, possibly containing beverages for the group. The atmosphere appears to be friendly and social, with everyone engaged in conversation and enjoying their time together.",
+    "mentions": [
+     "person",
+     "dining table",
+     "person",
+     "dining table",
+     "dining table",
+     "bowl",
+     "cup",
+     "sandwich",
+     "dining table",
+     "fork",
+     "knife",
+     "spoon",
+     "bottle",
+     "dining table"
+    ],
+    "hallucinated": [
+     "sandwich",
+     "fork",
+     "knife",
+     "spoon",
+     "bottle"
+    ],
+    "n_words": 118
+   },
+   "fox": {
+    "text": "The image shows a group of people sitting around a dining table, enjoying a meal together. There are several people in the scene, with some sitting on chairs and others standing. The table is filled with various items, including cups, bowls, and a knife. The people are engaged in conversation and laughter, creating a warm and friendly atmosphere.\n\nIn the background, there are multiple bottles and cups placed on the table, indicating that the group is enjoying drinks along with their meal. The scene is set in a restaurant, with a large dining table and chairs occupying the space. The people are seated around the table, enjoying their time together.",
+    "mentions": [
+     "person",
+     "dining table",
+     "person",
+     "chair",
+     "dining table",
+     "cup",
+     "bowl",
+     "knife",
+     "person",
+     "bottle",
+     "cup",
+     "dining table",
+     "dining table",
+     "chair",
+     "person",
+     "dining table"
+    ],
+    "hallucinated": [
+     "chair",
+     "knife",
+     "bottle",
+     "chair"
+    ],
+    "n_words": 127
+   }
+  }
+ },
+ "142774": {
+  "file": "COCO_val2014_000000142774.jpg",
+  "pope": {
+   "random": {
+    "yes": [
+     "person",
+     "motorcycle",
+     "bus"
+    ],
+    "no": [
+     "boat",
+     "kite",
+     "train"
+    ]
+   },
+   "popular": {
+    "yes": [
+     "person",
+     "motorcycle",
+     "bus"
+    ],
+    "no": [
+     "dining table",
+     "car",
+     "chair"
+    ]
+   },
+   "adversarial": {
+    "yes": [
+     "person",
+     "motorcycle",
+     "bus"
+    ],
+    "no": [
+     "car",
+     "bicycle",
+     "traffic light"
+    ]
+   }
+  },
+  "chair_ground_truth": [
+   "bus",
+   "motorcycle",
+   "person"
+  ],
+  "captions": {
+   "baseline": {
+    "text": "The image depicts a man riding a motorcycle on a street, with a large green bus driving behind him. The bus is filled with passengers, and it appears to be a public transit bus. The man on the motorcycle is positioned in the middle of the scene, with the bus occupying the majority of the background.\n\nThere are several people visible in the image, including the man on the motorcycle and the passengers on the bus. Some of the passengers are standing, while others are seated. The scene captures a typical day on the road, with a mix of public transportation and personal vehicles sharing the space.",
+    "mentions": [
+     "person",
+     "motorcycle",
+     "bus",
+     "bus",
+     "person",
+     "bus",
+     "person",
+     "motorcycle",
+     "bus",
+     "person",
+     "person",
+     "motorcycle",
+     "person",
+     "bus",
+     "person"
+    ],
+    "hallucinated": [],
+    "n_words": 119
+   },
+   "fox": {
+    "text": "The image shows a man riding a motorcycle on a street, with a green bus in the background. The bus is quite large, occupying a significant portion of the scene. The man is positioned in the middle of the street, and the bus is driving down the road behind him.\n\nThere are several people in the scene, with some standing near the bus and others scattered around the street. A few of them are carrying backpacks, indicating that they might be traveling or commuting. The scene captures a moment of everyday life in a city, with people going about their daily routines.",
+    "mentions": [
+     "person",
+     "motorcycle",
+     "bus",
+     "bus",
+     "person",
+     "bus",
+     "person",
+     "bus",
+     "backpack",
+     "person"
+    ],
+    "hallucinated": [
+     "backpack"
+    ],
+    "n_words": 114
+   }
+  }
+ },
+ "562155": {
+  "file": "COCO_val2014_000000562155.jpg",
+  "pope": {
+   "random": {
+    "yes": [
+     "person",
+     "car",
+     "tie"
+    ],
+    "no": [
+     "suitcase",
+     "sports ball",
+     "bed"
+    ]
+   },
+   "popular": {
+    "yes": [
+     "person",
+     "car",
+     "tie"
+    ],
+    "no": [
+     "dining table",
+     "chair",
+     "cup"
+    ]
+   },
+   "adversarial": {
+    "yes": [
+     "person",
+     "car",
+     "tie"
+    ],
+    "no": [
+     "dining table",
+     "truck",
+     "cup"
+    ]
+   }
+  },
+  "chair_ground_truth": [
+   "car",
+   "person",
+   "tie"
+  ],
+  "captions": {
+   "baseline": {
+    "text": "The image features a young man wearing a gray shirt and a green and white striped tie. He is sitting in a car, possibly in the back seat, and appears to be smiling. The man is wearing glasses, which adds to his overall appearance.\n\nThe car is parked in a parking lot, and there are a few other cars visible in the background. The scene suggests that the man might be attending an event or going to a formal occasion.",
+    "mentions": [
+     "person",
+     "tie",
+     "car",
+     "chair",
+     "person",
+     "car",
+     "car",
+     "person"
+    ],
+    "hallucinated": [
+     "chair"
+    ],
+    "n_words": 89
+   },
+   "fox": {
+    "text": "The image features a young man wearing glasses and a tie, sitting in a car. He is smiling and appears to be enjoying the moment. The car is parked in a parking lot, and the man is sitting in the driver's seat. The tie is green and white, adding a touch of color to the scene.",
+    "mentions": [
+     "person",
+     "tie",
+     "car",
+     "car",
+     "person",
+     "chair",
+     "tie"
+    ],
+    "hallucinated": [
+     "chair"
+    ],
+    "n_words": 63
+   }
+  }
+ }
+}

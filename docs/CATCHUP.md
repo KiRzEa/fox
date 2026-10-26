@@ -36,11 +36,23 @@ Câu 1 đã trả lời xong phần lớn. Câu 2 là nơi kết quả thú vị
 
 ### 2.2 Hai benchmark
 
+> **POPE và CHAIR là THƯỚC ĐO, không phải phương pháp.** Chúng không cạnh
+> tranh với Fox — chúng là cái dùng để chấm Fox. Nhầm chỗ này sẽ đọc sai
+> toàn bộ bảng kết quả.
+>
+> - **Phương pháp** (cái được so sánh với nhau): `sampling` (baseline), `fox`,
+>   VCD, ICD, OPERA, CausalMM, SID. Đây đều là cách *giải mã* — chúng thay
+>   đổi mô hình sinh token thế nào.
+> - **Thước đo** (cái dùng để chấm): POPE và CHAIR.
+>
+> Mỗi ô trong bảng kết quả là *(một phương pháp) chấm bởi (một thước đo)*.
+> Ví dụ "fox trên CHAIR_S = 46.74".
+
 | Từ | Nghĩa |
 |---|---|
 | **POPE** | Polling-based Object Probing Evaluation. 3000 câu hỏi **có/không** dạng *"Is there a dog in the image?"*. Sinh đúng **1 token**. Đo khả năng **phân biệt** |
 | **POPE random / popular / adversarial** | Ba split, độ khó tăng dần. `random` lấy vật thể ngẫu nhiên; `popular` lấy vật thể hay xuất hiện; `adversarial` lấy vật thể **hay đi cùng** vật thể có thật — khó nhất, và là nơi paper tuyên bố cải thiện lớn nhất |
-| **CHAIR** | Caption Hallucination Assessment with Image Relevance. Cho model **mô tả ảnh** (~100 từ), đếm vật thể bịa. 500 ảnh COCO val2014. Đo khả năng **sinh** |
+| **CHAIR** | Caption Hallucination Assessment with Image Relevance (Rohrbach et al., 2018). Một **thước đo**, không phải phương pháp. Cho model **mô tả ảnh** (~100 từ), rồi đối chiếu danh sách vật thể nó nhắc tới với chú thích thật của COCO, đếm phần bịa. 500 ảnh COCO val2014. Đo khả năng **sinh** |
 | **COCO val2014** | Bộ ảnh gốc, 40,504 ảnh. POPE và CHAIR đều lấy ảnh từ đây |
 
 ### 2.3 Các chỉ số
@@ -50,9 +62,33 @@ Câu 1 đã trả lời xong phần lớn. Câu 2 là nơi kết quả thú vị
 | **accuracy** | POPE: tỉ lệ trả lời đúng | cao |
 | **F1** | POPE: trung bình điều hoà precision/recall | cao |
 | **yes-ratio** | POPE: tỉ lệ trả lời "yes". **Không phải trang trí** — một phương pháp có thể nâng accuracy chỉ bằng cách trả lời "no" nhiều hơn | — (chẩn đoán) |
-| **CHAIR_S** | tỉ lệ **caption** chứa ít nhất một vật thể bịa | **thấp** |
-| **CHAIR_I** | tỉ lệ **lần nhắc vật thể** là bịa | **thấp** |
+| **CHAIR_S** | **S = sentence.** Tỉ lệ **caption** chứa ít nhất một vật thể bịa | **thấp** |
+| **CHAIR_I** | **I = instance.** Tỉ lệ **lần nhắc vật thể** là bịa | **thấp** |
 | **recall** | tỉ lệ vật thể thật được nhắc tới | cao |
+
+Hai chỉ số CHAIR đếm trên hai đơn vị khác nhau:
+
+```
+CHAIR_S = (số caption có >= 1 vật thể bịa) / (tổng số caption)
+CHAIR_I = (số lần nhắc vật thể bị bịa)     / (tổng số lần nhắc vật thể)
+```
+
+Số thật của baseline (greedy, 500 ảnh):
+
+| | tử số | mẫu số | kết quả |
+|---|---|---|---|
+| CHAIR_S | 246 caption có bịa | 500 caption | **49.20%** |
+| CHAIR_I | 520 lần nhắc bị bịa | 3762 lần nhắc | **13.82%** |
+
+Cùng một caption đóng góp vào cả hai theo cách khác nhau. Ví dụ ảnh `117527`
+(xem [`../samples/`](../samples/)): caption nhắc vật thể 14 lần, trong đó 5
+lần là bịa → đóng góp **1** vào tử số CHAIR_S, và **5/14** vào CHAIR_I.
+
+Vì sao cần cả hai: CHAIR_S nói *"bao nhiêu caption có vấn đề"*, CHAIR_I nói
+*"vấn đề nặng cỡ nào"*. Một mô hình bịa đúng một vật thể trong mọi caption có
+CHAIR_S cao nhưng CHAIR_I thấp. CHAIR_S cũng nhiễu hơn nhiều — ở n=500 nó chỉ
+phân giải được khoảng 8.85 điểm, còn CHAIR_I có 3762 lần nhắc nên phân giải
+được ~2.24 điểm.
 
 > **Bẫy quan trọng:** CHAIR_S có thể bị "gian lận" bằng cách **nói ít đi** —
 > caption nhắc ít vật thể thì bịa ít vật thể. Vì vậy mọi số CHAIR trong repo

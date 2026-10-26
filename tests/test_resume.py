@@ -365,28 +365,30 @@ class TestLimitAndRunKey(unittest.TestCase):
     def test_dtype_is_in_the_file_name(self) -> None:
         self.assertIn("dt-bf16", self._cfg(dtype="bf16").run_key().filename())
 
-    def test_remaining_stub_method_fails_loudly(self) -> None:
-        """Only opera is still a stub.
+    def test_no_method_is_a_stub_and_opera_refuses_sampling(self) -> None:
+        """Nothing is a stub any more; OPERA refuses the wrong protocol.
 
-        Everything except OPERA is implemented in
-        ``foxrepro.bench.methods`` and tested in ``tests/test_methods.py``
-        against a fake model, so those are deliberately absent here: calling
-        ``load()`` on them would try to fetch a checkpoint.
+        Every compared method is implemented in ``foxrepro.bench.methods``
+        and tested against a fake or tiny model, so none of them appears
+        here: calling ``load()`` would try to fetch a checkpoint.
 
-        OPERA is a beam-search method with rollback whose reference
-        implementation is its own transformers fork, and it cannot share the
-        nucleus-sampling protocol the other arms are compared under.
+        What is still worth asserting is OPERA's one hard constraint. It is
+        beam search, so it has no sampling variant -- and the paper agrees,
+        printing the identical OPERA numbers in its sampling and greedy
+        tables. A run that asked for sampling would silently be comparing a
+        deterministic arm against stochastic ones.
         """
-        for name in ("opera",):
-            with self.subTest(method=name):
-                method = get_method(name)(self._cfg(method=name))
-                with self.assertRaises(NotImplementedError):
-                    method.load()
+        with self.assertRaises(ValueError) as cm:
+            get_method("opera")(self._cfg(method="opera", decoding="sampling"))
+        self.assertIn("no sampling variant", str(cm.exception))
+        # and it constructs fine under the protocol it does have
+        get_method("opera")(self._cfg(method="opera", decoding="greedy"))
 
     def test_implemented_methods_are_not_stubs(self) -> None:
         from foxrepro.bench.generate import _NotImplementedMethod
 
-        for name in ("sampling", "fox", "vcd", "icd", "sid", "vcd_fox_fusion"):
+        for name in ("sampling", "fox", "vcd", "icd", "sid", "causalmm",
+                     "opera", "vcd_fox_fusion"):
             with self.subTest(method=name):
                 cls = get_method(name)
                 self.assertFalse(

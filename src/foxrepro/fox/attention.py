@@ -143,6 +143,18 @@ class FoxState:
     #: is an error, not a reason to skip the mask -- see _sid_dropped.
     sid_keep: Optional[torch.Tensor] = None
 
+    # ---- OPERA: the last layer's attention, for the over-trust penalty ----
+    # Captured here rather than via output_attentions=True, which on this
+    # stack returns an empty tuple under SDPA (see the module docstring) and
+    # would otherwise retain all 32 layers -- 3.9 GB at 5 beams on a 620-token
+    # prefill. Only the last query row is needed, and only at one layer.
+    opera_capture: bool = False
+    opera_layer: int = -1
+    #: ``[B, n_keys]``, max-pooled over heads, in the model dtype. Refilled by
+    #: every forward that reaches ``opera_layer``; cleared by the loop first,
+    #: so a miss raises instead of reusing the previous candidate's row.
+    opera_attn: Optional[torch.Tensor] = None
+
     # ---- readouts, refilled every forward ----
     collect: bool = True
     diagnostics: Dict[int, Dict[str, torch.Tensor]] = field(default_factory=dict)
@@ -195,6 +207,41 @@ def _repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
         return x
     b, n_kv, s, d = x.shape
     return x[:, :, None].expand(b, n_kv, n_rep, s, d).reshape(b, n_kv * n_rep, s, d)
+
+
+def _opera_capture_attn(
+    module: Any,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    attention_mask: Optional[torch.Tensor],
+    scaling: float,
+) -> None:
+    """Stash the last query's attention row, max-pooled over heads.
+
+    OPERA reads ``outputs.attentions[-1].max(1, keepdim=True).values`` and
+    keeps only the last query row, so that is all this computes: ``q[-1] @
+    K.T`` rather than the full matrix. Softmax is row-independent, so the
+    values are identical, and it avoids materialising
+    ``[5 beams, 32, q, kv]`` per layer.
+
+    Max over heads, not mean -- SID's CT2S averages, OPERA max-pools, and
+    the two are different statistics of the same tensor. The pooling runs in
+    the model dtype because eager LLaMA casts its fp32 softmax back to the
+    query dtype before returning the weights, and OPERA pools that.
+
+    Normalisation is deliberately NOT done here: OPERA divides ``attn_last``
+    by its own row sum *after* assembling the square, and a max over heads
+    does not sum to 1, so where the division happens is observable.
+    """
+    n_rep = getattr(module, "num_key_value_groups", 1)
+    k_states = _repeat_kv(key, n_rep)
+    q_last = query[:, :, -1:, :]
+    logits = torch.matmul(q_last, k_states.transpose(2, 3)) * scaling
+    if attention_mask is not None:
+        logits = logits + attention_mask[..., -1:, : k_states.shape[-2]].to(
+            logits.dtype)
+    probs = F.softmax(logits, dim=-1, dtype=torch.float32).to(query.dtype)
+    FOX.opera_attn = probs.max(dim=1).values[:, 0, :]
 
 
 def _sid_dropped(n_keys: int, device: Any) -> torch.Tensor:
@@ -448,6 +495,13 @@ def fox_attention_forward(
     from transformers.integrations.sdpa_attention import sdpa_attention_forward
 
     layer_idx = getattr(module, "layer_idx", None)
+
+    if FOX.opera_capture and layer_idx is not None and layer_idx == FOX.opera_layer:
+        _opera_capture_attn(
+            module, query, key, attention_mask,
+            scaling if scaling is not None
+            else float(module.head_dim) ** -0.5,
+        )
 
     if FOX.sid_enabled and layer_idx is not None and FOX.span_is_set():
         agg = FOX.sid_agg_layer

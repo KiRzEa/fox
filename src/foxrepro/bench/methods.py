@@ -877,3 +877,118 @@ class CausalMMMethod(_ContrastiveMethod):
         info["clean_branch_bit_identical_to_other_arms"] = False
         info["vision_tower_attn"] = "eager (forced by output_attentions)"
         return info
+
+
+@register_method
+class OPERAMethod(_LlavaMethod):
+    """OPERA (Huang et al., CVPR 2024): beam search with an over-trust penalty.
+
+    Structurally unlike every other arm here. The rest are one sequence with
+    a decoding rule; this is a five-beam search that runs five extra
+    speculative forwards per step to score candidate tokens that have not
+    been emitted yet. The search lives in :mod:`foxrepro.fox.opera`, which
+    also carries the audit of what the released 559-line version does.
+
+    **Labelled greedy, and the paper agrees.** Beam search is deterministic,
+    so OPERA has no sampling variant -- and indeed the paper prints the
+    *identical* OPERA numbers in Table 1 (its sampling table) and Table 9
+    (its greedy one). One run per seed is therefore the whole arm, and
+    ``decoding="sampling"`` is refused rather than silently accepted.
+
+    **POPE only, and that is a property of the method rather than a budget
+    decision.** OPERA's second mechanism -- retrospection-reallocation --
+    cannot fire below 16 response tokens: the rollback score is only selected
+    when more than 10 tokens have been emitted, and the trigger needs a modal
+    column repeated more than 15 times in a history with one column per step.
+    ``opera_generate`` refuses a length where rollback would become
+    reachable, so this arm cannot silently become "OPERA minus half its
+    method" on CHAIR.
+
+    Generation length is 10, not our POPE default of 1, because that is what
+    ``pope_eval.py`` passes. With beam search that is not cosmetic: the
+    search scores whole sequences, so the first token depends on how many
+    follow it.
+    """
+
+    name = "opera"
+
+    #: ``pope_eval.py``'s argparse defaults, and the README's command line.
+    num_beams: ClassVar[int] = 5
+    num_attn_candidates: ClassVar[int] = 5
+    penalty_weights: ClassVar[float] = 1.0
+
+    def __init__(self, cfg: GenConfig) -> None:
+        super().__init__(cfg)
+        if cfg.decoding == "sampling":
+            raise ValueError(
+                "OPERA is beam search and has no sampling variant -- the "
+                "paper prints the same numbers in its sampling and greedy "
+                "tables. Run it with --decoding greedy"
+            )
+
+    def _decode_kwargs(self) -> Dict[str, Any]:  # pragma: no cover - unused
+        """Never called: this method does not go through ``fox_generate``."""
+        raise NotImplementedError
+
+    def generate(self, sample: Sample, prompt: str) -> MethodOutput:
+        from foxrepro.fox.opera import opera_generate
+
+        inputs = dict(self._prepare(sample, prompt))
+        cfg = self.cfg
+        result = opera_generate(
+            self.model, inputs,
+            max_new_tokens=cfg.max_new_tokens,
+            num_beams=self.num_beams,
+            num_attn_candidates=self.num_attn_candidates,
+            penalty_weights=self.penalty_weights,
+            collect_trace=True,
+        )
+        text = self.processor.tokenizer.decode(
+            result["token_ids"], skip_special_tokens=True
+        ).strip()
+        trace = result.get("trace") or []
+        extra: Dict[str, Any] = {
+            "variant": "opera",
+            "image_span": list(result["image_span"]),
+            "n_steps": len(trace),
+            "n_forwards_per_step": result["n_forwards_per_step"],
+            **self._record(),
+        }
+        if trace:
+            # The two numbers that decide whether the penalty does anything.
+            # It is added in LOGIT space, so what matters is its spread across
+            # the five candidates against the spread of their raw logits.
+            extra["penalty_spread_mean"] = sum(
+                t["penalty_spread"] for t in trace) / len(trace)
+            extra["logit_spread_mean"] = sum(
+                t["logit_spread"] for t in trace) / len(trace)
+            extra["n_steps_penalty_changed_top"] = sum(
+                1 for t in trace if t["penalty_changed_top"])
+        return MethodOutput(
+            text=text,
+            n_prompt_tokens=int(result["n_prompt_tokens"]),
+            n_gen_tokens=int(result["n_gen_tokens"]),
+            extra=extra,
+        )
+
+    def _record(self) -> Dict[str, Any]:
+        return {
+            "num_beams": self.num_beams,
+            "num_attn_candidates": self.num_attn_candidates,
+            "penalty_weights": self.penalty_weights,
+            "rollback": False,
+        }
+
+    def describe(self) -> Dict[str, Any]:
+        info = dict(super().describe())
+        info["resolved_hyperparameters"] = self._record()
+        info["search"] = f"beam-{self.num_beams}"
+        info["fusion"] = "none"
+        info["fox_intervention"] = "off"
+        info["intervention"] = "none"
+        # Not a deviation but a proved-unreachable omission; see the class
+        # docstring and docs/DEVIATIONS.md Sec 3.13.
+        info["rollback_implemented"] = False
+        info["rollback_reachable_at_this_length"] = bool(
+            self.cfg.max_new_tokens > 15)
+        return info

@@ -410,7 +410,8 @@ def register_method(cls: Type[Method]) -> Type[Method]:
 #: not in ``bench/methods.py`` is now a test failure rather than a phantom
 #: entry in ``--list-methods``.
 _GPU_METHODS = frozenset({
-    "sampling", "fox", "vcd", "icd", "sid", "causalmm", "vcd_fox_fusion",
+    "sampling", "fox", "vcd", "icd", "sid", "causalmm", "opera",
+    "vcd_fox_fusion",
 })
 
 
@@ -487,7 +488,8 @@ def list_methods() -> List[str]:
 
 
 # --------------------------------------------------------------------------- #
-# remaining stub: opera. The rest are real, in bench/methods.py
+# No stubs left. Every compared method lives in bench/methods.py; the base
+# class below is kept because it is the right shape for the next one.
 # --------------------------------------------------------------------------- #
 class _NotImplementedMethod(Method):
     """Shared body for the not-yet-implemented methods."""
@@ -507,20 +509,6 @@ class _NotImplementedMethod(Method):
 
     def generate(self, sample: Sample, prompt: str) -> MethodOutput:
         raise NotImplementedError(f"{self.name}.generate: see load()'s message")
-
-
-@register_method
-class OPERAMethod(_NotImplementedMethod):
-    """OPERA (Huang et al., 2024): beam search with an over-trust penalty.
-
-    Optional baseline. Note it is incompatible with the shared nucleus-sampling
-    protocol: the paper evaluates it with its own ``num_beams=5``
-    configuration, so a run of this method must set ``decoding="greedy"``
-    or an OPERA-specific decoding label, never ``"sampling"``.
-    """
-
-    name = "opera"
-    todo = "beam search (num_beams=5) with the attention over-trust penalty and rollback."
 
 
 @register_method

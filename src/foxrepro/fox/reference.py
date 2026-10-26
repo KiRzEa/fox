@@ -502,7 +502,25 @@ RELEASED_INSTRUCTION_TEMPLATE = "USER: <ImageHere> <question> ASSISTANT:"
 RELEASED_CHAIR_QUESTION = "Please describe this image in detail."
 
 #: ``pope_eval.py:402`` and ``char_eval.py:191``.
+#:
+#: This is the FOX fork's value and the three forks disagree: SID's
+#: ``pope_eval.py:317`` and OPERA's ``pope_eval.py:204`` both pass 10. Which
+#: one a compared method should be run at is therefore a real choice, not a
+#: detail -- see OPERA_POPE_MAX_NEW_TOKENS.
 RELEASED_POPE_MAX_NEW_TOKENS = 1
+
+#: OPERA's own ``pope_eval.py:204``, which SID's fork also carries.
+#:
+#: It matters for OPERA and not for the others, because OPERA is a beam
+#: search: it scores whole sequences, so the first token it emits depends on
+#: how many follow. VCD, ICD, SID and CausalMM decide each token on its own,
+#: so for them the length only changes how much text the parser has to read.
+#:
+#: Fox re-ran its compared rows in its OWN harness (docs/DEVIATIONS.md Sec
+#: 3.9), so the number in Fox's Table 1 is a 1-token run. That makes 1 the
+#: right length for the row that is put against Fox's table, and 10 the right
+#: length for the row that is put against OPERA's paper. The plan runs both.
+OPERA_POPE_MAX_NEW_TOKENS = 10
 RELEASED_CHAIR_MAX_NEW_TOKENS = 512
 
 #: ``pope_eval.py:233``.

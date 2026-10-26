@@ -90,6 +90,7 @@ __all__ = [
     "Job", "PLAN", "measured_cost", "scan_progress", "next_jobs", "render_plan",
     "partition_jobs", "partition_by_priority", "pair_key",
     "ingest_runs", "archive_runs", "DUAL_BRANCH", "SPLIT_BRANCH",
+    "BEAM_SEARCH",
 ]
 
 #: Seconds per sample on 2x T4 with LLaVA-1.5-7B fp16 sharded. Measured, not
@@ -113,6 +114,24 @@ COST_S: Dict[Tuple[str, str], float] = {
     ("chair", "dual"): 10.9,      # 90.6 min / 500
     ("chair", "split"): 16.4,     # estimated: 2x single, no batching to share
     ("diag", "single"): 0.55,     # one prefill, no generation
+    # No ("*", "beam") entry on purpose: OPERA is the one shape whose cost
+    # scales with the generation length, so it is not a flat per-sample
+    # number -- see BEAM_COST_S and Job.est_seconds.
+}
+
+#: OPERA's cost, split because it is the only arm where ``max_new_tokens``
+#: changes the bill: one prefill at ``num_beams`` rows, then
+#: ``max_new_tokens x (1 + num_attn_candidates)`` decode forwards, also at
+#: ``num_beams`` rows.
+#:
+#: Estimated, not measured. A 625-token prefill at batch 5 is ~4.4e13 FLOPs,
+#: ~1.1 s at the ~40 TFLOP/s these two T4s actually reach; a decode forward
+#: is bandwidth-bound at ~13 GB of weights, ~0.04 s, and there are six per
+#: step. Replace both with measurements after the first session --
+#: ``logs/_job_times_*.tsv`` is where every other number here came from.
+BEAM_COST_S: Dict[str, float] = {
+    "prefill": 1.1,
+    "forward": 0.04,
 }
 
 N_SAMPLES: Dict[Tuple[str, str], int] = {
@@ -131,6 +150,16 @@ DUAL_BRANCH = frozenset({"fox", "vcd", "sid", "causalmm", "vcd_fox_fusion"})
 #: Methods whose two branches cannot be batched, so the weights are read twice
 #: per token. ICD disturbs the instruction, so the sequences differ in length.
 SPLIT_BRANCH = frozenset({"icd"})
+
+#: Methods that run a beam search: ``num_beams`` rows plus
+#: ``num_attn_candidates`` speculative forwards per step. A different cost
+#: shape from either branch count, and the only one whose cost scales with
+#: ``max_new_tokens``.
+BEAM_SEARCH = frozenset({"opera"})
+
+#: ``--num_attn_candidates``: how many speculative forwards each step pays
+#: for, on top of the main one.
+OPERA_N_CANDIDATES = 5
 
 
 @dataclass(frozen=True)
@@ -153,6 +182,12 @@ class Job:
     alpha: Optional[float] = None
     seed: int = 42
     limit: Optional[int] = None
+    #: Overrides the per-benchmark default. OPERA is the only user: its own
+    #: harness generates 10 tokens on POPE where ours generates 1, and with
+    #: beam search that is not a cosmetic difference -- the search optimises
+    #: the whole sequence, so the first token it picks depends on how many
+    #: follow. It is in VARIANT_FIELDS, so the run file reflects it.
+    max_new_tokens: Optional[int] = None
     note: str = ""
 
     def template_id(self) -> str:
@@ -214,21 +249,36 @@ class Job:
 
     @property
     def branches(self) -> str:
+        if self.method in BEAM_SEARCH:
+            return "beam"
         if self.method in SPLIT_BRANCH:
             return "split"
         return "dual" if self.method in DUAL_BRANCH else "single"
 
     def est_seconds(self) -> float:
+        if self.branches == "beam":
+            n_fwd = 1 + OPERA_N_CANDIDATES
+            per_sample = (
+                BEAM_COST_S["prefill"]
+                + self.n_new_tokens() * n_fwd * BEAM_COST_S["forward"]
+            )
+            return self.n_samples * per_sample
         return self.n_samples * COST_S.get(
             (self.benchmark, self.branches), COST_S[("pope", "single")]
         )
+
+    def n_new_tokens(self) -> int:
+        """Generation length: the benchmark default unless overridden."""
+        if self.max_new_tokens is not None:
+            return int(self.max_new_tokens)
+        return 1 if self.benchmark == "pope" else 512
 
     def run_key(self) -> RunKey:
         """Must match what ``generate.py`` would build, or progress is wrong."""
         variant = {
             "gamma": self.gamma, "k": self.k, "tau_js": self.tau_js,
             "alpha": self.alpha, "beta": None,
-            "max_new_tokens": 1 if self.benchmark == "pope" else 512,
+            "max_new_tokens": self.n_new_tokens(),
             "prompt_template_id": self.template_id(),
             "model_id": "llava-hf/llava-1.5-7b-hf",
             "decoding": self.decoding, "top_p": 0.9, "temperature": 1.0,
@@ -263,6 +313,8 @@ class Job:
                           ("--tau-js", self.tau_js), ("--alpha", self.alpha)):
             if val is not None:
                 parts.append(f"{flag} {val:g}")
+        if self.max_new_tokens is not None:
+            parts.append(f"--max-new-tokens {self.max_new_tokens}")
         if self.limit:
             parts.append(f"--limit {self.limit}")
         return " ".join(parts)
@@ -541,6 +593,38 @@ def _build_plan() -> List[Job]:
             jobs.append(Job("table9_methods", method, bench, split,
                             decoding="greedy",
                             note="released --sample-greedy default"))
+    # ---- OPERA: POPE only, and that is the method's own boundary --------- #
+    # Beam search, so deterministic -- one run per split is the whole arm, and
+    # the paper agrees: it prints the identical OPERA numbers in Table 1
+    # (sampling) and Table 9 (greedy), because there is no sampling variant to
+    # print. Hence `decoding="greedy"` and no seeds.
+    #
+    # No CHAIR row. OPERA's second mechanism, retrospection-reallocation,
+    # cannot fire below 16 response tokens (two independent gates; see
+    # docs/DEVIATIONS.md Sec 3.13), so POPE at 10 tokens exercises exactly the
+    # half of OPERA that the published POPE numbers came from, and CHAIR at
+    # 512 would need the rollback this project has audited but not yet built.
+    # `opera_generate` refuses the long length rather than quietly running
+    # OPERA with half its method missing.
+    #
+    # TWO lengths, because the three forks disagree and for a beam search the
+    # disagreement is load-bearing: it scores whole sequences, so the first
+    # token depends on how many follow. Fox's pope_eval.py passes 1; OPERA's
+    # and SID's pass 10. Fox re-ran its compared rows in its own harness, so
+    # the OPERA number in Fox's Table 1 is a 1-token run -- that is the row
+    # that belongs next to ours, and the 10-token run is the one that belongs
+    # next to OPERA's own paper. For every other compared method the length
+    # only changes how much text the parser reads, so they get one arm each.
+    for split in _pope_splits():
+        jobs.append(Job("table1_methods", "opera", "pope", split,
+                        decoding="greedy",
+                        note="beam-5 + over-trust penalty, Fox's 1-token harness"))
+    # OPERA's own protocol. One split: this answers "does the length change
+    # the answer for a beam search", and adversarial is where the gaps live.
+    jobs.append(Job("opera_protocol", "opera", "pope", "adversarial",
+                    decoding="greedy", max_new_tokens=10,
+                    note="OPERA's own 10-token harness; still rollback-free"))
+
     # CausalMM is not in that round: its harness never argmaxes the unmasked
     # logits, so there is no greedy default to reproduce. It does run
     # top_p=1 instead of 0.9, which is a protocol difference rather than a
@@ -1009,7 +1093,8 @@ def measured_cost(runs_root: Optional[Path] = None) -> Dict[str, float]:
                 bench = rec.get("benchmark", "?")
                 m = rec.get("method")
                 branches = (
-                    "split" if m in SPLIT_BRANCH
+                    "beam" if m in BEAM_SEARCH
+                    else "split" if m in SPLIT_BRANCH
                     else "dual" if m in DUAL_BRANCH
                     else "single"
                 )

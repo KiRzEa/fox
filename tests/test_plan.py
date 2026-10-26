@@ -56,7 +56,12 @@ def cfg_from_command(cmd: str) -> GenConfig:
             args.get("prompt_template_id")
             or ("pope_v0_raw" if bench == "pope" else "chair_v1")
         ),
-        max_new_tokens=MAX_NEW_TOKENS_DEFAULT[str(bench)],
+        # Mirrors generate.py:1017 -- the flag wins, the benchmark default
+        # fills in. OPERA is the only job that passes it, and with beam
+        # search the length is not cosmetic, so a stand-in that ignored the
+        # flag would hide a run-file mismatch rather than catch one.
+        max_new_tokens=int(str(args["max_new_tokens"]))
+        if args.get("max_new_tokens") else MAX_NEW_TOKENS_DEFAULT[str(bench)],
         decoding=str(args["decoding"]),
         system_prompt_id=str(args["system_prompt"]),
         wrapper_id=str(args.get("wrapper") or "released"),
@@ -131,9 +136,38 @@ class TestPlanShape(unittest.TestCase):
         self.assertLess(small.est_seconds(), full.est_seconds())
 
     def test_cost_model_covers_every_planned_combination(self) -> None:
+        """No job may fall through to ``COST_S``'s default.
+
+        It did once: a missing ``N_SAMPLES`` entry made a new split look free
+        and the session packer then placed it anywhere. The same hazard
+        applies to the cost table, so every shape must be modelled
+        explicitly -- either by a ``COST_S`` entry or, for the one shape whose
+        cost scales with the generation length, by ``BEAM_COST_S``.
+        """
+        from foxrepro.bench.plan import BEAM_COST_S
+
         for job in PLAN:
             with self.subTest(note=job.note):
+                if job.branches == "beam":
+                    self.assertIn("prefill", BEAM_COST_S)
+                    self.assertIn("forward", BEAM_COST_S)
+                    continue
                 self.assertIn((job.benchmark, job.branches), COST_S)
+
+    def test_a_beam_job_costs_more_the_longer_it_generates(self) -> None:
+        """OPERA is the only arm whose bill scales with max_new_tokens.
+
+        Six forwards per step rather than one, so a flat per-sample number
+        would under-bill the 10-token arm by a factor of ~2.6.
+        """
+        short = Job("t", "opera", "pope", "adversarial", decoding="greedy")
+        long = Job("t", "opera", "pope", "adversarial", decoding="greedy",
+                   max_new_tokens=10)
+        self.assertEqual(short.branches, "beam")
+        self.assertGreater(long.est_seconds(), 2 * short.est_seconds())
+        # and it is not the single-branch fallback
+        plain = Job("t", "sampling", "pope", "adversarial")
+        self.assertGreater(short.est_seconds(), plain.est_seconds())
 
 
 class TestProgressTracking(unittest.TestCase):

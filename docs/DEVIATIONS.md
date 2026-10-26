@@ -675,11 +675,146 @@ and 7-10 h for a 500-caption CHAIR run, per seed. That fits a session.
    columns, so the count cannot reach 15. And the body opens with
    `if rollback_loc < 10: assert False`.
 
-So OPERA-on-POPE reduces to **beam search (5 beams) plus a bonus equal to the
-candidate's total attention over the image span, at weight 1.0**
-(`candidate_token_scores -= penalty_weights * (-attn_scores)`). The
-retrospection-reallocation half — the paper's named second mechanism — is
-reachable only on CHAIR, where `max_new_tokens=512`.
+The retrospection-reallocation half — the paper's named second mechanism —
+is reachable only on CHAIR, where `max_new_tokens=512`.
+
+**But "beam search plus a bonus on the log-probs" is NOT what the rest of it
+does.** An earlier version of this section said so and was wrong; the
+corrected rule, verified line by line, is:
+
+```
+l        = logits[:, -1, :]                  # RAW, no log_softmax yet
+(l5, t5) = topk(l, num_attn_candidates)      # top-5 by raw logit, per beam
+l5      += penalty_weights * attn_image(t5)  # the bonus, in LOGIT space
+vec      = full(-999.);  vec[t5] = l5        # the rest of the vocab is discarded
+scores   = log_softmax(vec) + beam_scores    # normalised over the five
+→ global topk(2*num_beams) over the 25 survivors → beam_scorer.process
+```
+
+Three consequences, each of which changes which sequences are reachable:
+
+1. the bonus lands on **logits**, where top-5 LLaMA gaps are O(1)–O(5), not
+   on log-probs;
+2. `log_softmax` normalises over **each beam's own five candidates**
+   (`utils.py:3555-3557`, the `except:` branch — which is the *normal* path,
+   because the `try` ends in `else: assert False`). Every beam therefore gets
+   a different additive constant `LSE_full(l) − LSE_top5(l+a)`, and beams are
+   then compared in one global `topk`, so a per-beam constant is not
+   harmless: a beam whose top-5 covers 0.99 of the mass and one covering 0.50
+   differ by ~0.69 nats, larger than the bonus itself;
+3. the candidate set is **hard-restricted to five per beam**. Stock beam
+   search takes the best `2 * num_beams` over `num_beams * vocab_size` and
+   can take ten tokens from one beam; OPERA cannot see past each beam's
+   fifth.
+
+`-999.` and not `-inf` is load-bearing: after `log_softmax` the 31 995
+discarded tokens sit at a finite ≈ −1009, so when `process` banks an EOS
+candidate and walks further down the `2 * num_beams` list, a discarded token
+can be promoted into a live beam. At step 0 only beam 0 is live, so five of
+the ten `topk` entries are junk by construction.
+
+#### OPERA, ported — what we run and what we measure
+
+`src/foxrepro/fox/opera.py` implements the above on this stack, with its own
+beam bookkeeping (`transformers`' `BeamSearchScorer` is deprecated and
+removed in v4.62.0, and this project must keep running on one environment;
+ours is asserted equivalent to the library's while the library still has
+one). Three things that forced the 559-line fork in 4.29 are library calls
+here, because this project already replaced the decode loop:
+
+* the last layer's attention comes from our registered attention function,
+  not `output_attentions=True` — which on this stack returns an empty tuple
+  under SDPA and would otherwise retain all 32 layers (3.94 GB at 5 beams on
+  a 620-token prefill);
+* `DynamicCache.crop` undoes a speculative forward. **This is mandatory, not
+  an optimisation**: on 4.29 the KV cache was an immutable tuple and
+  `torch.cat` built new tensors, so the release could discard the extended
+  copy. `DynamicCache.update` mutates in place, so without the crop the five
+  candidate passes would corrupt the search's own cache — and it would still
+  produce fluent text. Asserted in `tests/test_opera.py`;
+* the beam permutation is `DynamicCache.reorder_cache`.
+
+**Labelled greedy, and the paper agrees.** Beam search is deterministic, so
+OPERA has no sampling variant — and the paper prints the *identical* OPERA
+numbers in Table 1 (sampling) and Table 9 (greedy). One run per split is the
+whole arm, and `decoding="sampling"` is refused.
+
+**`max_new_tokens=10`, not our POPE default of 1**, because that is what
+`pope_eval.py` passes. With beam search the length is not cosmetic: the
+search scores whole sequences, so the first token depends on how many follow
+it. Both lengths are below the rollback threshold, so both are rollback-free,
+but only 10 is OPERA's protocol. `opera_generate` refuses any length at
+which rollback would become reachable rather than running OPERA with half its
+method missing under OPERA's name.
+
+**The measurement that decides whether the penalty does anything.** The bonus
+is added in logit space, so what matters is its spread across the five
+candidates against the spread of their raw logits. Every run records
+`penalty_spread_mean`, `logit_spread_mean` and
+`n_steps_penalty_changed_top`. On a correct-geometry but randomly
+initialised stand-in the spread is 3e-4 against a logit spread of 0.1 — 300x
+smaller, and the penalty never moved the top candidate. The structural reason
+is that the row is normalised over all keys and 576 of 586 are image tokens,
+so `attn_image` ≈ 1 for every candidate and they differ only in how much the
+next token attends to the handful of text keys. **This is not yet a claim
+about the real model** — a trained LLaVA has attention sinks and far more
+structure — but if the real run shows the same ratio, then OPERA's
+over-trust penalty is inert on POPE and its published number is beam-5 with a
+truncated candidate set. The diagnostic is in the record so the run answers
+it rather than an argument doing so.
+
+#### The rollback, audited but not built
+
+CHAIR needs it, and three findings say it should not be ported literally.
+
+**The trigger is driven by fp16 saturation, not by attention.** The
+column-product score is
+
+```python
+attn_local = scale_factor * attn_local                  # x50, fp16
+local_score = 1e-7 * attn_local[..., j:, j].prod(-1)    # up to 512 factors, fp16
+attn_local_scores[..., j] = local_score.to(torch.float32)
+```
+
+and that last cast is a **no-op**: the destination buffer is declared
+`dtype=torch.float16`. fp16's smallest subnormal is 5.96e-8, so after the
+`1e-7` scaling any column whose product falls below ≈0.30 rounds to exactly
+zero, and anything below ≈610 lands in the subnormal range with ~3
+significant bits — ties everywhere, and `max(-1)` returns the lowest-indexed
+tie. At the other end, a column with a steady factor of 25 (raw attention
+0.5) overflows to `inf` after only **four** factors. And on CHAIR, where
+`cur_response_lens > 10` makes the rollback score the penalty itself, an
+`inf` drives all five candidate logits to `-inf`; after the `-999` mask
+`log_softmax` then **prefers the 31 995 discarded tokens** (≈ −10.4) over
+every real candidate. That failure mode is a few multiplications away from
+the released configuration.
+
+**One index looks wrong.** `reject_token_pos_gather` is indexed by response
+*position* everywhere (`[rollback_pos]`, `[rollback_pos+1]`) except
+`utils.py:3481`, which clears from the tail of the fixed 512-slot list
+(`[-1]`, `[-2]`, …). Stale rejections at the discarded positions are never
+cleared and slots near 511 are clobbered.
+
+**`DynamicCache.crop` cannot substitute for the rollback's re-prefill.** The
+release restores `history_states[-2]["input_ids"]` and **re-prefills from
+scratch**, vision tower included (`utils.py:3497-3528`). Cropping is not
+equivalent: cache rows at step *T* are in the *current* beam order, so
+cropping row *i* yields current-beam-*i*'s ancestor prefix — and if all five
+current beams descend from one old beam, the other four length-*L*
+hypotheses are gone. Re-prefilling is also the only thing that keeps the
+cache consistent with the restored hypothesis container.
+
+Plus two resource walls: `attn_previous.data.cpu()` every step for up to 512
+retained states is ≈3.3–6.6 GB of host RAM, alongside 512
+`copy.deepcopy(beam_scorer)`; and the rollback re-prefill is paid in full
+each time.
+
+**So when CHAIR is run, it will be run as two arms** — the fp16 product as
+released, and the same product accumulated in log-space fp32 — on the pattern
+this project already uses for `fox` vs `ulp_control`. If they agree, the
+saturation does not matter; if they disagree, "OPERA's rollback trigger is an
+fp16 artefact" is a finding of the same kind as the γ result, not a bug we
+have to pick a side on.
 
 ### 3.6 Hyperparameter defaults come from the code, not the paper
 

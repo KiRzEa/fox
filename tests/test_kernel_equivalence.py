@@ -470,19 +470,34 @@ class TestHarnessMatchesTheReleasedHarness(unittest.TestCase):
         self.assertEqual(parse_yes_no_released("Maybe"), "yes")
 
     def test_max_new_tokens_match_the_release(self) -> None:
+        """Every job runs at the Fox harness's length, with one exception.
+
+        The three forks disagree -- Fox passes 1 on POPE, OPERA's and SID's
+        harnesses pass 10 -- and for a beam search that is not cosmetic. So
+        the plan carries one OPERA arm at each length, and the override is
+        allowed only for OPERA and only at OPERA's own published value. Any
+        other job that drifts off the Fox length is a mistake.
+        """
         from foxrepro.bench.plan import PLAN
         from foxrepro.fox.reference import (
-            RELEASED_CHAIR_MAX_NEW_TOKENS, RELEASED_POPE_MAX_NEW_TOKENS,
+            OPERA_POPE_MAX_NEW_TOKENS, RELEASED_CHAIR_MAX_NEW_TOKENS,
+            RELEASED_POPE_MAX_NEW_TOKENS,
         )
 
         want = {"pope": RELEASED_POPE_MAX_NEW_TOKENS,
                 "chair": RELEASED_CHAIR_MAX_NEW_TOKENS}
+        n_overrides = 0
         for job in PLAN:
             with self.subTest(job=job.job_id()):
-                self.assertEqual(
-                    job.run_key().variant_fields["max_new_tokens"],
-                    want[job.benchmark],
-                )
+                got = job.run_key().variant_fields["max_new_tokens"]
+                if got == want[job.benchmark]:
+                    continue
+                n_overrides += 1
+                self.assertEqual(job.method, "opera")
+                self.assertEqual(job.benchmark, "pope")
+                self.assertEqual(got, OPERA_POPE_MAX_NEW_TOKENS)
+        self.assertEqual(n_overrides, 1,
+                         "exactly one job may leave the Fox harness's length")
 
     def test_the_chair_question_is_the_released_one(self) -> None:
         from foxrepro.data.loaders import PROMPT_TEMPLATES

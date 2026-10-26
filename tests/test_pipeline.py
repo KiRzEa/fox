@@ -716,3 +716,85 @@ class TestPerApproachStatistics(unittest.TestCase):
         bucket = group_by_seed(load_results(self.reports))[
             ("pope", "adversarial", "sampling", "fox")]
         self.assertEqual(sorted(bucket), [43])        # the 3000-sample run
+
+
+class TestResumeAcrossCommits(unittest.TestCase):
+    """A job spans sessions, and sessions run at different commits.
+
+    That is the design: the committed archive exists so a later session picks
+    up where an earlier one stopped, and the later session is a later clone.
+    Demanding commit_hash be constant made such a run ingest cleanly and then
+    be refused at scoring -- the worst of both -- and it disagreed with
+    plan.MERGE_COMPATIBLE_FIELDS, which already allows a newer commit to
+    merge. It cost a silent skip of one of ten fp32 seeds, which showed up as
+    n=9 in the report with no error anyone read.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+
+    def _rec(self, sid: str, **over):
+        base = {
+            "sample_id": sid, "method": "fox", "benchmark": "pope",
+            "split": "adversarial", "seed": 42, "dtype": "fp16",
+            "model_id": "llava-hf/llava-1.5-7b-hf", "decoding": "sampling",
+            "prompt_template_id": "pope_v0_raw", "max_new_tokens": 1,
+            "commit_hash": "aaaaaaa", "transformers_path": "/x/transformers",
+            "output": "No", "label": "no", "image_id": 1, "top_p": 0.9,
+            "temperature": 1.0, "gamma": None, "k": None, "tau_js": None,
+            "alpha": None, "beta": None, "intervention_layers": None,
+            "logit_dtype": "native", "softmax_dtype": "fp32",
+            "mode": "as_implemented", "system_prompt_id": "llava_v1",
+            "wrapper_id": "released",
+            # The rest of PROVENANCE_FIELDS: read_run requires every one of
+            # them, which is the point -- a record that cannot say how it was
+            # produced is not evidence.
+            "compute_capability": "7.5", "device_map": "auto",
+            "gpu_name": "Tesla T4", "latency_ms": 1.0, "n_gen_tokens": 1,
+            "n_gpus": 2, "n_prompt_tokens": 5, "prompt": "Is there a dog?",
+            "tf32_flags": {}, "timestamp": "2026-01-01T00:00:00Z",
+            "torch_version": "2.11.0+cu128", "transformers_version": "5.16.1",
+        }
+        base.update(over)
+        return base
+
+    def _write(self, recs) -> Path:
+        p = self.tmp / "run.jsonl"
+        p.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in recs))
+        return p
+
+    def test_a_resumed_run_reads_and_records_both_commits(self) -> None:
+        from foxrepro.bench.evaluate import read_run
+
+        p = self._write(
+            [self._rec(f"q{i}") for i in range(5)]
+            + [self._rec(f"q{i}", commit_hash="bbbbbbb") for i in range(5, 8)]
+        )
+        records, meta = read_run(p, strict=True)
+        self.assertEqual(len(records), 8)
+        self.assertEqual(meta["commit_hash"], ["aaaaaaa", "bbbbbbb"])
+        self.assertEqual(meta["resumed_across"]["commit_hash"],
+                         ["aaaaaaa", "bbbbbbb"])
+
+    def test_one_commit_is_recorded_as_a_scalar(self) -> None:
+        from foxrepro.bench.evaluate import read_run
+
+        _, meta = read_run(self._write([self._rec(f"q{i}") for i in range(3)]),
+                           strict=True)
+        self.assertEqual(meta["commit_hash"], "aaaaaaa")
+        self.assertNotIn("resumed_across", meta)
+
+    def test_a_field_that_changes_the_numbers_is_still_refused(self) -> None:
+        """Loosening commit_hash must not loosen anything that matters."""
+        from foxrepro.bench.evaluate import read_run
+
+        for field, value in (("dtype", "bf16"), ("seed", 43),
+                             ("logit_dtype", "fp32"), ("mode", "off"),
+                             ("prompt_template_id", "pope_v1")):
+            with self.subTest(field=field):
+                p = self._write([self._rec("q0"),
+                                 self._rec("q1", **{field: value})])
+                with self.assertRaises(ValueError):
+                    read_run(p, strict=True)

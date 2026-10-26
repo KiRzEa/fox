@@ -187,12 +187,27 @@ def read_run(path: Path, strict: bool = True) -> Tuple[List[Dict[str, Any]], Dic
         if missing:
             raise ValueError(f"{path}: records missing provenance fields {missing}")
 
+    # Fields that MUST be constant: anything that changes what was computed.
+    # A job routinely spans sessions, and sessions routinely run at different
+    # commits -- that is the design, not a fault. `commit_hash` and
+    # `transformers_path` are therefore recorded as sets rather than demanded
+    # constant, which also makes this agree with the ingest guard in
+    # plan.MERGE_COMPATIBLE_FIELDS, which already allows a newer commit to
+    # merge. Before this, a resumed job was ingested successfully and then
+    # refused at scoring time, which is the worst of both.
     shared_keys = (
         "method", "benchmark", "split", "seed", "dtype", "model_id",
-        "commit_hash", "transformers_path", "prompt_template_id",
-        "max_new_tokens", *VARIANT_FIELDS,
+        "prompt_template_id", "max_new_tokens", *VARIANT_FIELDS,
     )
+    #: Recorded, allowed to vary across a resumed run, surfaced for audit.
+    multi_keys = ("commit_hash", "transformers_path")
     meta: Dict[str, Any] = {"run_file": str(path)}
+    for key in multi_keys:
+        seen = sorted({str(r.get(key)) for r in records if r.get(key) is not None})
+        if seen:
+            meta[key] = seen[0] if len(seen) == 1 else seen
+            if len(seen) > 1:
+                meta.setdefault("resumed_across", {})[key] = seen
     for key in dict.fromkeys(shared_keys):
         values = {json.dumps(r.get(key), sort_keys=True) for r in records}
         if len(values) == 1:

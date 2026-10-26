@@ -156,8 +156,8 @@ _The paper states neither CHAIR_I's denominator (total mentioned object instance
 | chair/val2014_500 (greedy) | `fox noise_control` | CHAIR_I | 1 | 13.82+-0.00 | 11.88+-0.00 | n/a -- deterministic | - | - | -1.95 | - | see table above |
 | chair/val2014_500 (sampling) | `fox` | CHAIR_S | 10 | 53.72+-2.39 | 46.74+-2.12 | -6.98 [-9.25, -4.71] | 6.6e-05 | 0.00086 | -5.80 | -11.20 | **excludes paper** |
 | chair/val2014_500 (sampling) | `fox` | CHAIR_I | 10 | 16.39+-0.86 | 13.72+-0.54 | -2.67 [-3.37, -1.96] | 1.3e-05 | 0.00018 | -2.02 | -4.28 | **excludes paper** |
-| chair/val2014_500 (sampling) | `fox boost_visual g=4` | CHAIR_S | 9 | 53.84+-2.50 | 40.62+-0.94 | -13.22 [-15.05, -11.39] | 1.7e-07 | 3.2e-06 | -10.40 | - | resolved |
-| chair/val2014_500 (sampling) | `fox boost_visual g=4` | CHAIR_I | 9 | 16.40+-0.91 | 11.62+-0.45 | -4.77 [-5.36, -4.19] | 6.9e-08 | 1.4e-06 | -3.98 | - | resolved |
+| chair/val2014_500 (sampling) | `fox boost_visual g=4` | CHAIR_S | 9 | 53.84+-2.50 | 40.62+-0.94 | -13.22 [-15.05, -11.39] | 1.7e-07 | 2.9e-06 | -10.40 | - | resolved |
+| chair/val2014_500 (sampling) | `fox boost_visual g=4` | CHAIR_I | 9 | 16.40+-0.91 | 11.62+-0.45 | -4.77 [-5.36, -4.19] | 6.9e-08 | 1.3e-06 | -3.98 | - | resolved |
 | chair/val2014_500 (sampling) | `fox off` | CHAIR_S | 3 | 54.40+-2.40 | 49.20+-0.20 | -5.20 [-11.43, +1.03] | 0.069 | 0.22 **ns** | -3.00 | - | not resolved after Holm |
 | chair/val2014_500 (sampling) | `fox off` | CHAIR_I | 3 | 16.90+-1.09 | 14.05+-0.25 | -2.85 [-5.15, -0.56] | 0.033 | 0.2 **ns** | -2.36 | - | not resolved after Holm |
 | chair/val2014_500 (sampling) | `fox ulp_control` | CHAIR_S | 3 | 54.40+-2.40 | 45.53+-1.14 | -8.87 [-17.07, -0.67] | 0.043 | 0.22 **ns** | -7.40 | - | not resolved after Holm |
@@ -202,10 +202,10 @@ _The paper states neither CHAIR_I's denominator (total mentioned object instance
 | pope/adversarial (sampling) | `fox boost_visual g=4` | F1 | 10 | 78.93+-0.28 | 81.62+-0.30 | +2.69 [+2.42, +2.96] | 3e-09 | 6.8e-08 | +2.66 | - | resolved |
 | pope/adversarial (sampling) | `fox ld=bf16` | accuracy | 10 | 76.72+-0.31 | 81.77+-0.28 | +5.05 [+4.69, +5.41] | 1.5e-10 | 3.8e-09 | +4.83 | - | resolved |
 | pope/adversarial (sampling) | `fox ld=bf16` | F1 | 10 | 78.93+-0.28 | 81.62+-0.26 | +2.69 [+2.36, +3.03] | 2.1e-08 | 4.4e-07 | +2.54 | - | resolved |
-| pope/adversarial (sampling) | `fox ld=fp32` | accuracy | 9 | 76.75+-0.31 | 78.90+-0.22 | +2.15 [+1.83, +2.47] | 3.1e-07 | 5.2e-06 | +1.90 | - | resolved |
-| pope/adversarial (sampling) | `fox ld=fp32` | F1 | 9 | 78.96+-0.27 | 80.73+-0.19 | +1.77 [+1.50, +2.03] | 3.6e-07 | 5.7e-06 | +1.60 | - | resolved |
-| pope/adversarial (sampling) | `fox off` | accuracy | 10 | 76.72+-0.31 | 78.93+-0.30 | +2.21 [+1.84, +2.58] | 2.8e-07 | 5.1e-06 | +2.23 | - | resolved |
-| pope/adversarial (sampling) | `fox off` | F1 | 10 | 78.93+-0.28 | 80.75+-0.25 | +1.82 [+1.51, +2.14] | 3.6e-07 | 5.7e-06 | +1.83 | - | resolved |
+| pope/adversarial (sampling) | `fox ld=fp32` | accuracy | 10 | 76.72+-0.31 | 78.92+-0.22 | +2.20 [+1.90, +2.50] | 5e-08 | 1e-06 | +1.90 | - | resolved |
+| pope/adversarial (sampling) | `fox ld=fp32` | F1 | 10 | 78.93+-0.28 | 80.74+-0.18 | +1.82 [+1.55, +2.08] | 7.7e-08 | 1.4e-06 | +1.60 | - | resolved |
+| pope/adversarial (sampling) | `fox off` | accuracy | 10 | 76.72+-0.31 | 78.93+-0.30 | +2.21 [+1.84, +2.58] | 2.8e-07 | 4.5e-06 | +2.23 | - | resolved |
+| pope/adversarial (sampling) | `fox off` | F1 | 10 | 78.93+-0.28 | 80.75+-0.25 | +1.82 [+1.51, +2.14] | 3.6e-07 | 5.4e-06 | +1.83 | - | resolved |
 | pope/adversarial (sampling) | `fox ulp_control` | accuracy | 10 | 76.72+-0.31 | 81.83+-0.28 | +5.11 [+4.91, +5.30] | 5.2e-13 | 1.5e-11 | +4.97 | - | resolved |
 | pope/adversarial (sampling) | `fox ulp_control` | F1 | 10 | 78.93+-0.28 | 82.19+-0.28 | +3.26 [+3.04, +3.49] | 1.2e-10 | 3.2e-09 | +3.15 | - | resolved |
 | pope/adversarial (sampling) | `vcd` | accuracy | 3 | 76.72+-0.42 | 78.81+-0.07 | +2.09 [+1.01, +3.17] | 0.014 | 0.11 **ns** | +1.70 | -1.44 | not resolved after Holm |
@@ -246,8 +246,8 @@ The margin is a judgement, not a default, and is printed with every row. `smalle
 | pope/adversarial (sampling) | `fox boost_visual g=4` | F1 | 10 | -0.516 | [-0.753, -0.280] | +-0.5 | 0.5491 | +-0.75 | not shown |
 | pope/adversarial (sampling) | `fox ld=bf16` | accuracy | 10 | +0.013 | [-0.244, +0.270] | +-0.5 | 0.0035 | +-0.27 | **equivalent** |
 | pope/adversarial (sampling) | `fox ld=bf16` | F1 | 10 | -0.516 | [-0.754, -0.278] | +-0.5 | 0.5476 | +-0.75 | not shown |
-| pope/adversarial (sampling) | `fox ld=fp32` | accuracy | 9 | -2.904 | [-3.175, -2.632] | +-0.5 | 1.0000 | +-3.17 | not shown |
-| pope/adversarial (sampling) | `fox ld=fp32` | F1 | 9 | -1.458 | [-1.708, -1.208] | +-0.5 | 1.0000 | +-1.71 | not shown |
+| pope/adversarial (sampling) | `fox ld=fp32` | accuracy | 10 | -2.833 | [-3.105, -2.562] | +-0.5 | 1.0000 | +-3.11 | not shown |
+| pope/adversarial (sampling) | `fox ld=fp32` | F1 | 10 | -1.390 | [-1.643, -1.138] | +-0.5 | 0.9999 | +-1.64 | not shown |
 | pope/adversarial (sampling) | `fox off` | accuracy | 10 | -2.827 | [-3.044, -2.610] | +-0.5 | 1.0000 | +-3.04 | not shown |
 | pope/adversarial (sampling) | `fox off` | F1 | 10 | -1.384 | [-1.588, -1.181] | +-0.5 | 1.0000 | +-1.59 | not shown |
 | pope/adversarial (sampling) | `fox ulp_control` | accuracy | 10 | +0.073 | [-0.232, +0.379] | +-0.5 | 0.0154 | +-0.38 | **equivalent** |
@@ -466,6 +466,7 @@ Samples **per method** needed for a given gap at p = 0.82 (`paired_rho` is the c
 | `m-fox__b-pope__s-adversarial__seed-51__dt-fp16__v-sampling-08d18927` | `fox` | pope/adversarial | fp16 | None | None | None | 51 | 3000 | `llava-hf/llava-1.5-7b-hf` | `434b004` | `...on3.13/dist-packages/transformers/__init__.py` |
 | `m-fox__b-pope__s-adversarial__seed-51__dt-fp16__v-sampling-2d07edcb` | `fox` | pope/adversarial | fp16 | None | None | None | 51 | 3000 | `llava-hf/llava-1.5-7b-hf` | `f587e7f` | `...on3.13/dist-packages/transformers/__init__.py` |
 | `m-fox__b-pope__s-adversarial__seed-51__dt-fp16__v-sampling-93866aba` | `fox` | pope/adversarial | fp16 | None | None | None | 51 | 3000 | `llava-hf/llava-1.5-7b-hf` | `f587e7f` | `...on3.13/dist-packages/transformers/__init__.py` |
+| `m-fox__b-pope__s-adversarial__seed-51__dt-fp16__v-sampling-c7d23f9e` | `fox` | pope/adversarial | fp16 | None | None | None | 51 | 3000 | `llava-hf/llava-1.5-7b-hf` | `['5bbbec3', '7d52f44']` | `...on3.13/dist-packages/transformers/__init__.py` |
 | `m-fox__b-pope__s-adversarial__seed-51__dt-fp16__v-sampling-g4-01a74670` | `fox` | pope/adversarial | fp16 | 4.0 | None | None | 51 | 3000 | `llava-hf/llava-1.5-7b-hf` | `434b004` | `...on3.13/dist-packages/transformers/__init__.py` |
 | `m-fox__b-pope__s-adversarial__seed-997__dt-fp16__v-greedy-17d4eb8d` | `fox` | pope/adversarial | fp16 | None | None | None | 997 | 50 | `llava-hf/llava-1.5-7b-hf` | `f587e7f` | `...on3.13/dist-packages/transformers/__init__.py` |
 | `m-fox__b-pope__s-popular__seed-42__dt-fp16__v-greedy-17d4eb8d` | `fox` | pope/popular | fp16 | None | None | None | 42 | 3000 | `llava-hf/llava-1.5-7b-hf` | `f587e7f` | `...on3.13/dist-packages/transformers/__init__.py` |

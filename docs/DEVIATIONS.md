@@ -190,6 +190,54 @@ by this). Without it, `max_new_tokens=1` produces first tokens that are
 neither `Yes` nor `No` and the rules diverge. `released` is therefore the
 default, and `metrics["pope_parser"]` records which rule produced any number.
 
+### 3.8 CHAIR's 500 images are not recoverable, and that is measurable
+
+This is the one difference that cannot be closed by being more careful, so it
+is worth stating exactly.
+
+The release picks its CHAIR images like this (`char_eval.py:136-137`):
+
+```python
+img_files = os.listdir(args.data_path)      # default: /data-disk/only_test
+random.shuffle(img_files)
+...                                          # keeps the first --test-sample 500
+```
+
+Three independent problems, any one of which would be enough:
+
+1. `/data-disk/only_test` is not in the repository and is not described
+   anywhere. It is not full `val2014` — the name suggests a pre-filtered
+   subset — so even its population is unknown.
+2. `os.listdir` returns entries in filesystem order, which varies by
+   filesystem and by the order files were written. The seeded `random.shuffle`
+   that follows is therefore shuffling a machine-dependent list.
+3. The paper never names the set either. It says "500 COCO samples" in five
+   places (§5, Tables 2/6/9, C.3) and never which 500, never a selection
+   rule, and never "following [prior work]" — which some CHAIR papers do, and
+   which would have made the set recoverable.
+
+So our CHAIR numbers are computed on a *different* 500 images from the
+paper's, and no amount of care closes that. It also explains the shape of the
+reproduction: POPE uses POPE's fixed official annotation files and our
+baselines land within 0.05 points of the paper's, while the CHAIR baseline
+sits 3.88 points away.
+
+What can be done is to **measure how much it matters**. `CHAIR_DRAWS` adds
+four more independent 500-image draws from val2014 (`chair_images_d1..d4.json`
+in `assets/`, sampled with seeds 1–4), each selected by split name so every
+run records which 500 it scored. Running the baseline and Fox over all five
+draws turns "we could not reproduce CHAIR" into a number: how far CHAIR_S
+moves when nothing changes but the image set. If that spread covers 3.88
+points, the discrepancy is explained and the finding becomes one about the
+benchmark protocol rather than about the method.
+
+Those draw files are **ours, not the release's** — the released repository
+contains 22 non-vendored files and none of them is an image list. (`pope/coco/426.json`
+and `vase.json` look like candidates and are not: four POPE questions each,
+left over from debugging, and two of `vase.json`'s four are malformed —
+`"Waht are they doing?"` labelled `yes` and `"There are two"` labelled `no`.
+`popo_err.jsonl` is zero bytes.)
+
 ### 3.6 Hyperparameter defaults come from the code, not the paper
 
 They disagree. We default to the code, and record which source was used.
@@ -231,7 +279,7 @@ hyperparameters" despite Algorithm 1 taking it as an input.
 | | |
 |---|---|
 | A CHAIR evaluator | **The release has none.** `char_eval.py` only dumps captions; there is no `chair.py` and no synonym list. Table 2 is not reproducible from the release at all. |
-| A frozen CHAIR image list | The release globs `--data-path` for `*.jpg` and takes the first `--test-sample 500`, so which 500 images CHAIR scores depends on what happens to be in the directory. We ship an explicit list of 500 val2014 ids so the set is fixed and recorded. This is a deviation in *selection*, not in protocol: the paper does not state which 500 it used. |
+| A frozen CHAIR image list | `char_eval.py:136` does `os.listdir(args.data_path)`, shuffles it, and keeps the first `--test-sample 500`. `data_path` defaults to `/data-disk/only_test` — a directory that was never published — and `os.listdir` returns filesystem order, so the set depends both on that directory's contents and on the author's filesystem. We ship explicit lists of val2014 ids instead, selected by split name and recorded in every run's provenance. See §3.8. |
 | Six intervention arms as flags | `off`, `as_described`, `ulp_control`, `noise_control` — controls the paper never ran — plus `boost_visual` (below) |
 | **`boost_visual`** | The experiment the paper's motivation rests on and never performs. It argues from Figure 1(a), an *observational* comparison showing faithful and hallucinated samples carry the same global visual attention mass, that *amplifying* visual attention cannot help. That is the `P(Y\|X)` vs `P(Y\|do(X))` distinction the paper itself takes as its foundation: a quantity uncorrelated with an outcome can still change it when intervened upon. PAI, named in the introduction as the representative of that family, appears **twice in the whole paper** and is in **none of its tables**. This mode adds a positive bias to the image-token keys at the same heads and query positions Fox suppresses, leaving the system keys untouched — the same slice as `as_described`, opposite sign. |
 | Three independent dtype axes | weights / pre-softmax logit storage / softmax accumulation. The mechanism lives in the second |

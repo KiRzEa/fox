@@ -54,6 +54,23 @@ Câu 1 đã trả lời xong phần lớn. Câu 2 là nơi kết quả thú vị
 | **POPE random / popular / adversarial** | Ba split, độ khó tăng dần. `random` lấy vật thể ngẫu nhiên; `popular` lấy vật thể hay xuất hiện; `adversarial` lấy vật thể **hay đi cùng** vật thể có thật — khó nhất, và là nơi paper tuyên bố cải thiện lớn nhất |
 | **CHAIR** | Caption Hallucination Assessment with Image Relevance (Rohrbach et al., 2018). Một **thước đo**, không phải phương pháp. Cho model **mô tả ảnh** (~100 từ), rồi đối chiếu danh sách vật thể nó nhắc tới với chú thích thật của COCO, đếm phần bịa. 500 ảnh COCO val2014. Đo khả năng **sinh** |
 | **COCO val2014** | Bộ ảnh gốc, 40,504 ảnh. POPE và CHAIR đều lấy ảnh từ đây |
+| **chair_images.json** | Danh sách 500 ảnh CHAIR mà **repo này** chọn (mẫu seed 0). **Không phải** của repo gốc — repo gốc không có danh sách nào |
+| **chair_images_d1..d4.json** | Bốn bộ 500 ảnh **khác**, bốc độc lập (seed 1–4). Cũng là của repo này. Chúng **không** khôi phục bộ ảnh của paper — xem cảnh báo dưới |
+
+> **Vì sao có d1..d4, và vì sao chúng không giúp tái lập.**
+> `char_eval.py:136` của release làm `os.listdir("/data-disk/only_test")`, xáo
+> trộn, rồi lấy 500 cái đầu. Thư mục đó **chưa từng được công bố**, và
+> `os.listdir` trả về theo thứ tự filesystem. Paper cũng chỉ viết *"500 COCO
+> samples"* ở năm chỗ mà không nói là 500 ảnh nào, không nêu quy tắc chọn, và
+> không dẫn theo bộ của công trình trước. **Bộ ảnh CHAIR của paper không khôi
+> phục được về nguyên tắc.**
+>
+> d1..d4 không cố khôi phục nó. Chúng **đo độ nhạy**: chạy baseline và Fox
+> trên cả năm bộ, xem CHAIR_S dịch bao nhiêu khi *chỉ đổi tập ảnh*. Nếu biên
+> độ phủ được 3.88 điểm chênh lệch hiện tại thì khoảng cách được giải thích,
+> và kết luận chuyển từ *"không tái lập được CHAIR"* sang *"giao thức CHAIR
+> của paper không tái lập được, và đây là mức độ ảnh hưởng"*. Chi tiết ở
+> [`DEVIATIONS.md`](DEVIATIONS.md) §3.8.
 
 ### 2.3 Các chỉ số
 

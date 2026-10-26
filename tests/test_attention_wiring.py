@@ -731,6 +731,68 @@ class TestBackboneProbe(unittest.TestCase):
             self.skipTest("no network")
         self.assertEqual(r["visual_tokens"], 290 - 33 + 1)
 
+    def test_every_visual_count_is_derived_not_asserted(self) -> None:
+        """Three backbones, three different derivation rules, no table lookup.
+
+        The counts were hardcoded first -- 576, 32, 258 -- which reads as
+        measured and is asserted, the failure this project keeps catching.
+        They now come from the configs, and the hardcoded values survive only
+        as a cross-check that must agree.
+        """
+        want = {
+            "llava-hf/llava-1.5-7b-hf": ("vision_config", 576),
+            "Salesforce/instructblip-vicuna-7b": ("num_query_tokens", 32),
+            "shikras/shikra-7b-delta-v1-0708": ("clip-vit-large-patch14", 258),
+        }
+        for mid, (marker, count) in want.items():
+            r = self._probe(mid)
+            if r["verdict"] == "UNREACHABLE":
+                self.skipTest("no network")
+            with self.subTest(model=mid):
+                self.assertEqual(r["visual_tokens"], count)
+                self.assertIn(marker, r["visual_derivation"])
+                self.assertFalse(r["visual_mismatch"])
+
+    def test_a_wrong_cross_check_value_is_reported_not_swallowed(self) -> None:
+        """If the table and the derivation disagree, one is wrong."""
+        import importlib.util
+        import sys as _sys
+
+        from foxrepro.storage import paths
+
+        spec = importlib.util.spec_from_file_location(
+            "_bbprobe3", paths().repo_root / "scripts" / "probe_backbone.py")
+        mod = importlib.util.module_from_spec(spec)
+        _sys.modules["_bbprobe3"] = mod
+        spec.loader.exec_module(mod)
+
+        mod.EXPECTED_VISUAL_TOKENS["llava-hf/llava-1.5-7b-hf"] = 999
+        try:
+            r = mod.probe("llava-hf/llava-1.5-7b-hf")
+        except Exception as exc:                        # noqa: BLE001
+            self.skipTest(f"network unavailable: {exc}")
+        if r["verdict"] == "UNREACHABLE":
+            self.skipTest("no network")
+        self.assertTrue(r["visual_mismatch"])
+        self.assertEqual(r["visual_tokens"], 576)       # the derivation wins
+
+    def test_the_download_size_is_measured_from_the_listing(self) -> None:
+        """Counting .bin and .safetensors together called 29.5 GiB 63 GiB."""
+        r = self._probe("Salesforce/instructblip-vicuna-7b")
+        if r["verdict"] == "UNREACHABLE":
+            self.skipTest("no network")
+        self.assertIn("safetensors", r["download_derivation"])
+        self.assertLess(r["download_gib"], 35)          # not the 63 GiB double count
+        self.assertGreater(r["download_gib"], 25)
+
+    def test_the_preprocessor_source_is_read_from_the_config(self) -> None:
+        """config.mm_vision_tower, not a table maintained by hand."""
+        r = self._probe("shikras/shikra-7b-delta-v1-0708")
+        if r["verdict"] == "UNREACHABLE":
+            self.skipTest("no network")
+        self.assertEqual(r["preprocessing"]["repo"],
+                         "openai/clip-vit-large-patch14")
+
     def test_shikra_ships_no_image_processor_and_that_is_fine(self) -> None:
         """A decoder that loads and cannot see is not runnable.
 

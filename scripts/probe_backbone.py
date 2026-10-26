@@ -46,55 +46,18 @@ KNOWN = [
 LLAMA_SHAPE = ("hidden_size", "intermediate_size", "num_attention_heads",
                "num_hidden_layers")
 
-#: Where each backbone's IMAGE PREPROCESSING comes from.
+#: Cross-check only. These are what the derivation below is EXPECTED to
+#: produce; they are not the source of truth and are never returned on their
+#: own. If a derivation disagrees with one of them the probe says so loudly,
+#: because one of the two is then wrong and silence would pick the wrong one.
 #:
-#: A checkpoint that loads is not a checkpoint that runs. Shikra ships no
-#: ``preprocessor_config.json`` at all, which looks like a hole and is not:
-#: its pixels are prepared by the vision tower's own processor, named in
-#: ``config.json`` as ``mm_vision_tower``. The released code confirms it --
-#: ``minigpt4/processors/clip_processors.py``'s ``clip_image_eval`` is a
-#: wrapper with no logic of its own::
-#:
-#:     self.transform = CLIPImageProcessor.from_pretrained(proc_type)
-#:     return self.transform.preprocess(item, return_tensors='pt')['pixel_values'][0]
-#:
-#: so the preprocessing is stock HuggingFace, reachable from the modern stack.
-PREPROCESSING = {
-    "llava-hf/llava-1.5-7b-hf": {
-        "source": "self", "repo": None,
-        "note": "ships its own preprocessor_config.json and processor_config.json",
-    },
-    "Salesforce/instructblip-vicuna-7b": {
-        "source": "self", "repo": None,
-        "note": "ships its own; also carries a Q-Former tokenizer",
-    },
-    "shikras/shikra-7b-delta-v1-0708": {
-        "source": "vision_tower", "repo": "openai/clip-vit-large-patch14",
-        "note": "no preprocessor in the checkpoint by design -- pixels go "
-                "through CLIPImageProcessor from the vision tower named in "
-                "config.mm_vision_tower. The release's clip_image_eval wraps "
-                "exactly that and adds nothing.",
-    },
-}
-
-#: Visual token counts, stated rather than inferred, because each comes from a
-#: different place: LLaVA expands <image> into patch tokens in input_ids,
-#: InstructBLIP feeds Q-Former queries, Shikra splices a projected CLIP grid
-#: between two marker tokens.
-VISUAL_LAYOUT = {
-    "llava-hf/llava-1.5-7b-hf": {
-        "visual_tokens": 576, "note": "24x24 patches from CLIP ViT-L/14-336, "
-        "expanded into input_ids by the processor",
-    },
-    "Salesforce/instructblip-vicuna-7b": {
-        "visual_tokens": 32, "note": "Q-Former query tokens, NOT patches -- "
-        "H_vis becomes an entropy over 32 positions instead of 576",
-    },
-    "shikras/shikra-7b-delta-v1-0708": {
-        "visual_tokens": 258, "note": "256 CLIP ViT-L/14 patches plus "
-        "<im_start> and <im_end>; the released code hardcodes this as "
-        "img_s==33 and img_e==290 (290-33+1 = 258)",
-    },
+#: They were hardcoded as the answer at first, which is the failure this
+#: project keeps catching: a number that reads as measured and is asserted.
+EXPECTED_VISUAL_TOKENS = {
+    "llava-hf/llava-1.5-7b-hf": 576,
+    "Salesforce/instructblip-vicuna-7b": 32,
+    "shikras/shikra-7b-delta-v1-0708": 258,
+    "shikras/shikra-7b-delta-v1": 258,
 }
 
 
@@ -115,6 +78,85 @@ def _repo_files(repo: str):
             return [f["rfilename"] for f in json.loads(fh.read()).get("siblings", [])]
     except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError):
         return []
+
+
+def _grid_tokens(vision_cfg: dict):
+    """``(image_size / patch_size) ** 2`` -- the patch count of a ViT grid."""
+    try:
+        side = int(vision_cfg["image_size"]) // int(vision_cfg["patch_size"])
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+    return side * side
+
+
+def derive_visual_tokens(model_id: str, cfg: dict):
+    """How many positions Fox's ``H_vis`` is an entropy over, and why.
+
+    Three different mechanisms across three backbones, so the derivation has
+    to branch rather than read one field:
+
+    * **Q-Former** models state ``num_query_tokens`` outright -- the visual
+      stream is learned queries, not patches.
+    * **Self-contained ViT** models carry a ``vision_config``; the count is
+      its grid.
+    * **External tower** models (Shikra) name the tower in
+      ``mm_vision_tower`` and ship none of it, so the grid comes from that
+      repo's config, plus two if ``mm_use_im_start_end`` wraps it in
+      ``<im_start>`` / ``<im_end>``.
+
+    Returns ``(count, derivation)``; ``count`` is ``None`` when no rule fits,
+    which is a result and not a crash.
+    """
+    n = cfg.get("num_query_tokens")
+    if n:
+        return int(n), "config.num_query_tokens (Q-Former queries, not patches)"
+
+    vc = cfg.get("vision_config")
+    if isinstance(vc, dict):
+        g = _grid_tokens(vc)
+        if g:
+            return g, (f"({vc['image_size']}/{vc['patch_size']})^2 from "
+                       f"config.vision_config")
+
+    tower = cfg.get("mm_vision_tower")
+    if tower:
+        tcfg = _fetch(str(tower), "config.json") or {}
+        g = _grid_tokens(tcfg.get("vision_config", tcfg))
+        if g:
+            markers = 2 if cfg.get("mm_use_im_start_end") else 0
+            how = f"({g}) patches from {tower}"
+            if markers:
+                how += " + <im_start> + <im_end>"
+            return g + markers, how
+    return None, "no rule fits this config"
+
+
+def _repo_sizes(repo: str) -> dict:
+    """``filename -> bytes`` from the HF API, for the files it actually ships."""
+    url = f"https://huggingface.co/api/models/{repo}?blobs=true"
+    try:
+        with urllib.request.urlopen(url, timeout=60) as fh:
+            doc = json.loads(fh.read())
+    except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError):
+        return {}
+    return {f["rfilename"]: (f.get("size") or 0)
+            for f in doc.get("siblings", [])}
+
+
+def derive_download_gib(repo: str):
+    """What ``from_pretrained`` actually transfers.
+
+    Safetensors when present, because it prefers them and skips the duplicate
+    ``.bin`` shards -- counting both is how a 29.5 GiB checkpoint got called
+    63 GiB earlier in this project.
+    """
+    sizes = _repo_sizes(repo)
+    st = {k: v for k, v in sizes.items() if k.endswith(".safetensors")}
+    use = st or {k: v for k, v in sizes.items() if k.endswith(".bin")}
+    if not use:
+        return None, "no weight files listed"
+    fmt = "safetensors" if st else ".bin (no safetensors published)"
+    return round(sum(use.values()) / 1024**3, 1), f"{len(use)} {fmt} shards"
 
 
 def _weight_keys(repo: str):
@@ -154,21 +196,32 @@ def probe(model_id: str) -> dict:
         v = cfg.get("vocab_size", 32000)
         params = n * (4 * h * h + 3 * h * i) + 2 * v * h
 
-    layout = VISUAL_LAYOUT.get(model_id, {})
+    n_visual, how_visual = derive_visual_tokens(model_id, cfg)
+    expected = EXPECTED_VISUAL_TOKENS.get(model_id)
+    visual_mismatch = (expected is not None and n_visual is not None
+                       and expected != n_visual)
+
+    dl_gib, dl_how = derive_download_gib(model_id)
 
     # Does this repo carry its own image processor, and if not, is the one it
     # points at reachable? A decoder that loads and cannot see is not runnable.
     own_proc = [f for f in _repo_files(model_id)
                 if "preprocessor_config" in f or "processor_config" in f]
-    pre = dict(PREPROCESSING.get(model_id, {}))
     if own_proc:
-        pre.setdefault("source", "self")
-        pre.setdefault("note", f"ships {', '.join(sorted(own_proc))}")
-    elif not pre:
+        pre = {"source": "self", "repo": None,
+               "note": f"ships {', '.join(sorted(own_proc))}"}
+    elif cfg.get("mm_vision_tower"):
+        # Derived, not recorded: the checkpoint names its own tower, and the
+        # processor belongs to the tower rather than to the decoder.
+        pre = {"source": "vision_tower", "repo": str(cfg["mm_vision_tower"]),
+               "note": "no preprocessor in this repo by design -- pixels go "
+                       "through the processor of the tower named in "
+                       "config.mm_vision_tower"}
+    else:
         pre = {"source": "unknown", "repo": None,
-               "note": "no preprocessor config in this repo and none recorded "
-                       "here -- find out where pixels are prepared before "
-                       "calling this runnable"}
+               "note": "no preprocessor config in this repo, and the config "
+                       "names no vision tower to borrow one from -- find out "
+                       "how pixels are prepared before calling this runnable"}
     pre["ships_own"] = bool(own_proc)
     if pre.get("repo"):
         pre["source_repo_has_processor"] = bool(
@@ -204,8 +257,12 @@ def probe(model_id: str) -> dict:
         "params_est_b": round(params / 1e9, 2) if params else None,
         "weights_gib_fp16": round(params * 2 / 1024**3, 1) if params else None,
         "is_delta": "delta" in model_id,
-        "visual_tokens": layout.get("visual_tokens"),
-        "visual_note": layout.get("note"),
+        "visual_tokens": n_visual,
+        "visual_derivation": how_visual,
+        "visual_expected": expected,
+        "visual_mismatch": visual_mismatch,
+        "download_gib": dl_gib,
+        "download_derivation": dl_how,
         "preprocessing": pre,
         "verdict": verdict,
         "path": path,
@@ -257,9 +314,19 @@ def main(argv=None) -> int:
                 line += (f"; ~{need:.1f} GiB/GPU over {len(gpus)}, "
                          f"smallest has {min(g[1] for g in gpus):.1f}")
             print(line)
+        if r.get("download_gib"):
+            print(f"            download     : {r['download_gib']} GiB "
+                  f"({r['download_derivation']})")
         if r["visual_tokens"]:
-            print(f"            visual span  : {r['visual_tokens']} tokens "
-                  f"-- {r['visual_note']}")
+            print(f"            visual span  : {r['visual_tokens']} tokens  "
+                  f"<- {r['visual_derivation']}")
+            if r["visual_mismatch"]:
+                print(f"            *** MISMATCH : expected "
+                      f"{r['visual_expected']}, derived {r['visual_tokens']}. "
+                      f"One of the two is wrong -- do not proceed on either.")
+        else:
+            print(f"            visual span  : UNKNOWN "
+                  f"-- {r['visual_derivation']}")
         pre = r.get("preprocessing") or {}
         if pre:
             where = ("its own repo" if pre.get("ships_own")

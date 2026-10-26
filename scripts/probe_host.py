@@ -282,7 +282,11 @@ def check_gpus(model_id: str = "llava-hf/llava-1.5-7b-hf") -> dict:
     }
 
 
-#: Download size on disk of each checkpoint this project can run, in GiB.
+#: Fallback download sizes, in GiB, used only when the HuggingFace API cannot
+#: be reached. The live figure is derived from the repo's own file listing --
+#: a hardcoded number here would read as measured and be asserted, which is
+#: the mistake probe_backbone.py was corrected for.
+#:
 #: These are what HuggingFace actually transfers -- `from_pretrained` prefers
 #: safetensors and skips the duplicate `.bin` shards, so the figure is the
 #: safetensors total, not the repository total.
@@ -295,6 +299,40 @@ CHECKPOINT_DOWNLOAD_GIB = {
     "llava-hf/llava-1.5-7b-hf": 13.2,
     "Salesforce/instructblip-vicuna-7b": 29.5,
 }
+
+
+def _download_gib(model_id: str):
+    """Transfer size, measured from the repo listing where the network allows.
+
+    Falls back to the recorded figure offline, and says which it used, so a
+    number in the output is never ambiguous about whether it was observed.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    try:
+        url = f"https://huggingface.co/api/models/{model_id}?blobs=true"
+        with urllib.request.urlopen(url, timeout=30) as fh:
+            sib = _json.loads(fh.read()).get("siblings", [])
+        st = [f.get("size") or 0 for f in sib
+              if f["rfilename"].endswith(".safetensors")]
+        bins = [f.get("size") or 0 for f in sib
+                if f["rfilename"].endswith(".bin")]
+        use = st or bins
+        if use:
+            return (round(sum(use) / 1024**3, 1),
+                    f"measured from the repo listing, "
+                    f"{len(use)} {'safetensors' if st else '.bin'} shards")
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError,
+            _json.JSONDecodeError, KeyError):
+        pass
+
+    known = CHECKPOINT_DOWNLOAD_GIB.get(model_id)
+    if known:
+        return known, "recorded fallback, the HF API was unreachable"
+    return 13.2, ("NOT measured and not recorded for this checkpoint -- "
+                  "LLaVA's figure is standing in")
 
 
 def check_disk(model_id: str = "llava-hf/llava-1.5-7b-hf") -> dict:
@@ -332,18 +370,19 @@ def check_disk(model_id: str = "llava-hf/llava-1.5-7b-hf") -> dict:
             "total_gib": round(usage.total / 1024**3, 1),
         }
 
-    need = CHECKPOINT_DOWNLOAD_GIB.get(model_id, 13.2)
+    need, how = _download_gib(model_id)
     free = report["hf_cache (checkpoint)"]["free_gib"]
     fits = free > need * 1.15          # leave room for the partial-download file
     return {
         "check": "disk",
         "model_id": model_id,
         "checkpoint_download_gib": need,
+        "download_source": how,
         "roots": report,
         "status": _status(fits, warn=not fits and free > need),
         "note": (
-            f"{model_id} downloads {need:.1f} GiB. The HF cache root has "
-            f"{free:.1f} GiB free. "
+            f"{model_id} downloads {need:.1f} GiB ({how}). The HF cache "
+            f"root has {free:.1f} GiB free. "
             + ("Fits." if fits else
                "Does NOT fit with headroom. On Kaggle check that FOX_HF_HOME "
                "points at /kaggle/temp and not /kaggle/working, which is "

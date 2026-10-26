@@ -27,6 +27,7 @@ import json
 import math
 import platform
 import sys
+from pathlib import Path
 
 # Candidate gammas for the magnitude sweep. The claim under test is that the
 # intervention's effect is governed by the fp16 ULP at |gamma|, not by gamma
@@ -242,6 +243,76 @@ def check_gpus() -> dict:
                 "(it changes the quantity under study), so this host is unusable "
                 "for the reproduction."
             )
+        ),
+    }
+
+
+#: Download size on disk of each checkpoint this project can run, in GiB.
+#: These are what HuggingFace actually transfers -- `from_pretrained` prefers
+#: safetensors and skips the duplicate `.bin` shards, so the figure is the
+#: safetensors total, not the repository total.
+#:
+#: InstructBLIP is the awkward one: it is stored in **fp32**, so it downloads
+#: at roughly twice LLaVA-1.5 even though it occupies about the same VRAM once
+#: cast to fp16. The fix is not a format conversion -- it is already a
+#: HuggingFace repo -- but a one-time re-save at fp16. See docs/DEVIATIONS.md.
+CHECKPOINT_DOWNLOAD_GIB = {
+    "llava-hf/llava-1.5-7b-hf": 13.2,
+    "Salesforce/instructblip-vicuna-7b": 29.5,
+}
+
+
+def check_disk(model_id: str = "llava-hf/llava-1.5-7b-hf") -> dict:
+    """Free space where the checkpoint lands, which is not where runs land.
+
+    On Kaggle these are two different filesystems with two different limits,
+    and confusing them is easy: `/kaggle/working` is capped at 20 GB because
+    it is the notebook's *output*, while the HuggingFace cache goes to
+    `/kaggle/temp`, which is larger and ephemeral. A 30 GB checkpoint is a
+    problem only if the cache root cannot hold it.
+
+    Checked before a session commits, for the same reason the GPU is: finding
+    out ten hours in costs ten hours.
+    """
+    import shutil
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    from foxrepro.storage import paths
+
+    p = paths()
+    roots = {
+        "hf_cache (checkpoint)": p.hf_home,
+        "runs + reports": p.persist_root,
+        "images": p.coco_images_dir,
+    }
+    report = {}
+    for label, path in roots.items():
+        probe = path
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        usage = shutil.disk_usage(probe)
+        report[label] = {
+            "path": str(path),
+            "free_gib": round(usage.free / 1024**3, 1),
+            "total_gib": round(usage.total / 1024**3, 1),
+        }
+
+    need = CHECKPOINT_DOWNLOAD_GIB.get(model_id, 13.2)
+    free = report["hf_cache (checkpoint)"]["free_gib"]
+    fits = free > need * 1.15          # leave room for the partial-download file
+    return {
+        "check": "disk",
+        "model_id": model_id,
+        "checkpoint_download_gib": need,
+        "roots": report,
+        "status": _status(fits, warn=not fits and free > need),
+        "note": (
+            f"{model_id} downloads {need:.1f} GiB. The HF cache root has "
+            f"{free:.1f} GiB free. "
+            + ("Fits." if fits else
+               "Does NOT fit with headroom. On Kaggle check that FOX_HF_HOME "
+               "points at /kaggle/temp and not /kaggle/working, which is "
+               "capped at 20 GB because it is the notebook output.")
         ),
     }
 
@@ -476,11 +547,14 @@ def check_tf32() -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--model-id", default="llava-hf/llava-1.5-7b-hf",
+                    help="checkpoint whose download size the disk check uses")
     args = ap.parse_args()
 
     checks = [check_python(), check_torch()]
     cuda = checks[-1].get("cuda_available")
     checks.append(check_preinstalled_stack())
+    checks.append(check_disk(args.model_id))
     if cuda:
         checks += [check_gpus(), check_dtypes(), check_ulp(), check_tf32()]
 

@@ -265,3 +265,52 @@ class TestSessionAwareFetch(unittest.TestCase):
                 else:
                     self.assertEqual(what, "union")
                     self.assertTrue(splits)
+
+
+class TestDiskProbe(unittest.TestCase):
+    """The checkpoint and the run files land on different filesystems.
+
+    On Kaggle that distinction has a limit attached: /kaggle/working is capped
+    at 20 GB because it is the notebook's output, while the HuggingFace cache
+    goes to /kaggle/temp. A 30 GB checkpoint is only a problem if the cache
+    root cannot hold it, and finding that out ten hours in costs ten hours --
+    the same lesson as the missing GPU.
+    """
+
+    def _probe(self, model_id: str) -> dict:
+        import json as _json
+        import subprocess
+        import sys as _sys
+
+        from foxrepro.storage import paths
+
+        proc = subprocess.run(
+            [_sys.executable, str(paths().repo_root / "scripts" / "probe_host.py"),
+             "--json", "--model-id", model_id],
+            capture_output=True, text=True, timeout=600,
+        )
+        doc = _json.loads(proc.stdout)
+        return next(c for c in doc["checks"] if c["check"] == "disk")
+
+    def test_it_reports_the_three_roots_separately(self) -> None:
+        d = self._probe("llava-hf/llava-1.5-7b-hf")
+        self.assertEqual(
+            set(d["roots"]),
+            {"hf_cache (checkpoint)", "runs + reports", "images"},
+        )
+        for name, info in d["roots"].items():
+            with self.subTest(root=name):
+                self.assertIn("free_gib", info)
+                self.assertGreater(info["total_gib"], 0)
+
+    def test_instructblip_is_reported_as_the_larger_download(self) -> None:
+        """It is stored fp32, so it transfers at ~2x LLaVA for ~1x the VRAM."""
+        small = self._probe("llava-hf/llava-1.5-7b-hf")
+        large = self._probe("Salesforce/instructblip-vicuna-7b")
+        self.assertGreater(large["checkpoint_download_gib"],
+                           1.8 * small["checkpoint_download_gib"])
+
+    def test_an_unknown_model_falls_back_rather_than_crashing(self) -> None:
+        d = self._probe("some/unlisted-model")
+        self.assertGreater(d["checkpoint_download_gib"], 0)
+        self.assertIn(d["status"], ("PASS", "WARN", "FAIL"))

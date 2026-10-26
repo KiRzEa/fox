@@ -235,6 +235,7 @@ class _LlavaMethod(Method):
             dtype=self.cfg.dtype,
             device_map=self.cfg.device_map,
             eager_layers=self._eager_layers,
+            allow_cpu=bool(getattr(self.cfg, "allow_cpu", False)),
         )
 
     def unload(self) -> None:

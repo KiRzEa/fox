@@ -329,6 +329,7 @@ def load_llava(
     dtype: str = "fp16",
     device_map: str = "auto",
     eager_layers: Optional[frozenset] = None,
+    allow_cpu: bool = False,
 ) -> Tuple[Any, Any]:
     """Load LLaVA-1.5 with the Fox attention active on the chosen layers.
 
@@ -351,6 +352,7 @@ def load_llava(
                 "extremely slow. bf16 is for --logit-dtype, not --dtype."
             )
 
+    _refuse_cpu_only_host(dtype, allow_cpu=allow_cpu)
     _refuse_unconverted_checkpoint(model_id)
 
     register()
@@ -374,6 +376,45 @@ def load_llava(
 #: HuggingFace-converted one. Weight-identical, but not loadable as a
 #: ``LlavaForConditionalGeneration``.
 _UNCONVERTED_PREFIXES = ("liuhaotian/",)
+
+
+def _refuse_cpu_only_host(dtype: str, allow_cpu: bool = False) -> None:
+    """Stop before loading 14 GB when there is no GPU to load it onto.
+
+    Round 4 sessions 1 and 2 ran to the ten-hour wall on a Kaggle notebook
+    whose accelerator was never attached. ``torch`` was the CPU build, fp16
+    matmuls fell back to software, and a caption that costs 7.8 s on two T4s
+    took 724 s -- 93x slower. Each session produced about fifty usable
+    captions out of five hundred and then died on SIGTERM, and because the
+    plan's other jobs never started, twenty GPU-hours of quota bought nothing.
+
+    Nothing stopped it. ``probe_host.py`` runs first and reports the problem,
+    but the runner only echoes a warning, and ``device_map="auto"`` places the
+    model on CPU without complaint -- which is the right default for a laptop
+    and exactly wrong for an unattended ten-hour session.
+
+    Args:
+        dtype: the weight dtype requested.
+        allow_cpu: set by ``--allow-cpu`` for a deliberate CPU run.
+
+    Raises:
+        RuntimeError: when no CUDA device is visible and ``allow_cpu`` is not
+            set.
+    """
+    if allow_cpu or torch.cuda.is_available():
+        return
+    raise RuntimeError(
+        "no CUDA device is visible, so this run would execute on CPU.\n"
+        f"  torch {torch.__version__} "
+        f"({'CPU build' if '+cpu' in torch.__version__ else 'CUDA build'}), "
+        f"torch.cuda.is_available() = False\n"
+        "On Kaggle this means the notebook's accelerator is not attached: "
+        "set Sidebar -> Accelerator = GPU T4 x2 and restart the session.\n"
+        f"A {dtype} LLaVA-1.5-7B caption costs about 7.8 s on two T4s and "
+        "about 724 s on CPU, so a ten-hour session would finish roughly one "
+        "job in ten.\n"
+        "Pass --allow-cpu if you really intend a CPU run."
+    )
 
 
 def _refuse_unconverted_checkpoint(model_id: str) -> None:

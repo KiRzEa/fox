@@ -6,7 +6,7 @@
 #   local:   python3 -m foxrepro.bench.plan plan --budget-hours 9
 #            python3 -m foxrepro.bench.plan plan --budget-hours 9 \
 #                    --calibrate <logs>/_job_times.tsv --round r2   (after session 1)
-#   Kaggle:  bash run_kaggle_fox.sh <N>        N = session number (1..6)
+#   Kaggle:  bash run_kaggle_fox.sh <N>        N = session number (1..3)
 #            DRY=1 bash run_kaggle_fox.sh <N>  print the commands only
 #            BUDGET=10 bash run_kaggle_fox.sh <N>     hours, default from the plan
 #
@@ -37,6 +37,14 @@ pip install -q -e . || { echo "editable install failed"; exit 1; }
 # randomly initialised vision tower and produces fluent captions unrelated to
 # the image, which no metric downstream would catch.
 python3 scripts/probe_host.py || echo "[warn] probe reported problems; read them"
+
+# A missing accelerator is not a warning. r4 sessions 1 and 2 ran to the
+# ten-hour wall on a notebook whose GPU was never attached -- 724 s per caption
+# against 7.8 s on two T4s -- and finished about a tenth of one job each. The
+# probe said so, and the session carried on, because the probe only warned.
+if [ "${ALLOW_CPU:-0}" != "1" ]; then
+  python3 scripts/require_gpu.py || exit 3
+fi
 
 python3 - <<'PY'
 import sys

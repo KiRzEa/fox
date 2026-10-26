@@ -130,6 +130,10 @@ class GenConfig:
     #: Conversation wrapper. "released" is verbatim from the Fox repo's
     #: INSTRUCTION_TEMPLATE; "newline" uses the HF chat separator.
     wrapper_id: str = "released"
+    #: Deliberate CPU run. Not recorded in the variant hash -- the host is
+    #: provenance (n_gpus, gpu_name, torch_version already are), not an
+    #: experimental arm.
+    allow_cpu: bool = False
     logit_dtype: str = "native"     # "native" == same as ``dtype``
     softmax_dtype: str = "fp32"     # what every HF version actually does
     mode: str = "as_implemented"    # see storage.INTERVENTION_MODES
@@ -915,6 +919,12 @@ def build_parser() -> argparse.ArgumentParser:
                "ablation.")
     ap.add_argument("--max-new-tokens", type=int, default=None,
                     help="default: 1 for POPE, 512 for CHAIR")
+    ap.add_argument(
+        "--allow-cpu", action="store_true",
+        help="run without a GPU. Refused by default: r4 sessions 1 and 2 "
+             "burned to the ten-hour wall on a Kaggle notebook whose "
+             "accelerator was never attached, at 724 s per caption against "
+             "7.8 s on two T4s, and produced ~50 of 500 samples each.")
     ap.add_argument("--decoding", choices=("sampling", "greedy"), default="sampling")
     ap.add_argument("--top-p", type=float, default=0.9)
     ap.add_argument("--temperature", type=float, default=1.0)
@@ -1017,6 +1027,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         mode=args.mode, device_map=args.device_map,
         system_prompt_id=args.system_prompt,
         wrapper_id=args.wrapper,
+        allow_cpu=args.allow_cpu,
     )
     # Must happen before any model is loaded: cudnn.allow_tf32 defaults to
     # True, and on Ampere+ a TF32 matmul has ~10 mantissa bits, which would

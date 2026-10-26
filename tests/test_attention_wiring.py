@@ -553,3 +553,92 @@ class TestSamplerMatchesHuggingFace(unittest.TestCase):
         tok = A._sample_from(logits, top_p=1.0, temperature=1.0, greedy=False,
                              generator=torch.Generator().manual_seed(3))
         self.assertTrue(0 <= int(tok) < 512)
+
+
+class TestCpuOnlyHostIsRefused(unittest.TestCase):
+    """A missing accelerator must stop the run, not warn about it.
+
+    Round 4 sessions 1 and 2 ran to the ten-hour wall on a Kaggle notebook
+    whose GPU was never attached: torch was the CPU build, a caption that
+    costs 7.8 s on two T4s took 724 s, and each session finished about fifty
+    of five hundred samples before SIGTERM. Twenty hours of quota produced
+    nothing. probe_host.py had already said so -- the runner echoed a warning
+    and carried on.
+    """
+
+    def test_no_cuda_raises_and_names_the_fix(self) -> None:
+        import torch
+
+        from foxrepro.fox.attention import _refuse_cpu_only_host
+
+        orig = torch.cuda.is_available
+        torch.cuda.is_available = lambda: False
+        self.addCleanup(setattr, torch.cuda, "is_available", orig)
+        with self.assertRaises(RuntimeError) as ctx:
+            _refuse_cpu_only_host("fp16")
+        msg = str(ctx.exception)
+        self.assertIn("Accelerator", msg)      # what to change on Kaggle
+        self.assertIn("--allow-cpu", msg)      # how to override deliberately
+        self.assertIn("724", msg)              # why it matters
+
+    def test_allow_cpu_is_an_explicit_escape_hatch(self) -> None:
+        import torch
+
+        from foxrepro.fox.attention import _refuse_cpu_only_host
+
+        orig = torch.cuda.is_available
+        torch.cuda.is_available = lambda: False
+        self.addCleanup(setattr, torch.cuda, "is_available", orig)
+        _refuse_cpu_only_host("fp16", allow_cpu=True)   # must not raise
+
+    def test_a_cuda_host_passes(self) -> None:
+        import torch
+
+        from foxrepro.fox.attention import _refuse_cpu_only_host
+
+        orig = torch.cuda.is_available
+        torch.cuda.is_available = lambda: True
+        self.addCleanup(setattr, torch.cuda, "is_available", orig)
+        _refuse_cpu_only_host("fp16")
+
+    def test_the_runner_aborts_rather_than_warning(self) -> None:
+        """run_kaggle_fox.sh must exit, not echo."""
+        from foxrepro.storage import paths
+
+        script = (paths().repo_root / "run_kaggle_fox.sh").read_text()
+        self.assertIn("scripts/require_gpu.py", script)
+        self.assertIn("|| exit 3", script)
+        self.assertIn("ALLOW_CPU", script)
+
+    def test_the_gate_script_exits_nonzero_without_a_gpu(self) -> None:
+        import subprocess
+        import sys
+
+        from foxrepro.storage import paths
+
+        gate = paths().repo_root / "scripts" / "require_gpu.py"
+        self.assertTrue(gate.is_file())
+        proc = subprocess.run([sys.executable, str(gate)],
+                              capture_output=True, text=True, timeout=180)
+        import torch
+        if torch.cuda.is_available():
+            self.assertEqual(proc.returncode, 0, proc.stderr[-500:])
+        else:
+            self.assertEqual(proc.returncode, 3, proc.stdout[-500:])
+            self.assertIn("would run on CPU", proc.stderr)
+
+    def test_allow_cpu_is_not_part_of_the_variant_hash(self) -> None:
+        """The host is provenance, not an experimental arm.
+
+        n_gpus, gpu_name and torch_version are already recorded per record,
+        so a CPU run is identifiable; putting --allow-cpu in the hash would
+        split one job across two run files for no reason.
+        """
+        from foxrepro.bench.generate import GenConfig
+
+        base = dict(method="sampling", benchmark="pope", split="adversarial",
+                    seed=42, dtype="fp16", model_id="llava-hf/llava-1.5-7b-hf",
+                    prompt_template_id="pope_v0_raw", max_new_tokens=1)
+        a = GenConfig(**base).run_key().filename()
+        b = GenConfig(**base, allow_cpu=True).run_key().filename()
+        self.assertEqual(a, b)

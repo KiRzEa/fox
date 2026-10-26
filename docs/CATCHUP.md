@@ -36,7 +36,20 @@ Lý do bỏ qua, không phải vì lười mà vì từng cái có rào cản ri
 | **Shikra** | Không có bản HF conversion được bảo trì; release xác định vùng ảnh bằng số ma thuật `img_s == 33 and img_e == 290` |
 | **MME** | Release **không ship script MME nào** dù có báo cáo kết quả MME |
 | **GPT-4V judge** | API trả phí |
-| **ICD / SID / OPERA / CausalMM** | Xem [`DEVIATIONS.md`](DEVIATIONS.md) — chỉ VCD-noise chạy được, và nó **không phải VCD thật** |
+| **ICD / SID / OPERA / CausalMM** | Mỗi cái cần codebase riêng. Repo Fox **không chứa CausalMM**, SID không có cờ chạy. Thứ chạy được ở đây là nhánh nhiễu kiểu VCD trong fusion của Fox — **không phải VCD thật** |
+
+**Chỉ chạy lại `sampling` và `fox` — và đó là đủ.** Mọi tuyên bố của paper đều
+có dạng *"Fox hơn baseline X điểm"*, nên kiểm nó cần đúng hai dòng đó. Sáu
+dòng còn lại chỉ xếp hạng Fox giữa các phương pháp — là bối cảnh, không phải
+đóng góp. Và dòng quan trọng nhất đã được xác nhận: baseline của mình khớp
+paper trong **0.05 điểm** trên cả ba split POPE, nên cái *nền* mà mọi gap đo
+từ đó là đúng.
+
+> **Lưu ý khi trình bày:** các baseline kia **do nhóm tác giả tự chạy lại**,
+> không phải chép từ paper cũ. Đã kiểm: số VCD của họ lệch tới **5.55 điểm**
+> so với paper gốc của VCD và **ngược dấu** (VCD cải thiện trong paper của
+> chính nó, làm tệ đi trong paper Fox). Nói nhầm thành "họ chép số" là một
+> cáo buộc mà bằng chứng không ủng hộ. Chi tiết: [`DEVIATIONS.md`](DEVIATIONS.md) §3.9.
 
 Hệ quả cần nhớ khi viết: mọi kết luận của dự án này là về **LLaVA-1.5**.
 Chúng mạnh ở đó (10 seed, TOST, Holm), nhưng **không** tự động áp cho hai

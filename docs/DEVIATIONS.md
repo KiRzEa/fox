@@ -238,6 +238,52 @@ left over from debugging, and two of `vase.json`'s four are malformed —
 `"Waht are they doing?"` labelled `yes` and `"There are two"` labelled `no`.
 `popo_err.jsonl` is zero bytes.)
 
+### 3.9 Why only `sampling` and `fox` are re-run
+
+The paper's tables carry eight rows. This project runs two of them, and the
+reason is not cost.
+
+**The contribution being tested is Fox.** Every claim the paper makes has the
+shape "Fox improves on the baseline by X", so checking it needs exactly those
+two rows. The other six place Fox in a ranking; they are context, not the
+claim. And the baseline is the row that has to be right for any of it to
+mean anything — ours matches the paper's to 0.05 points on all three POPE
+splits, so the floor every gap is measured from is confirmed.
+
+**The other six were re-run by the authors, not copied.** This was checked
+rather than assumed, because the opposite assumption is easy to make and
+would be wrong. VCD's own paper (Leng et al., 2024, Table 1, MSCOCO,
+LLaVA-1.5) reports:
+
+| split | VCD paper: Regular -> VCD | Fox paper: Sampling -> VCD |
+|---|---|---|
+| random | 83.29 -> 87.73 (+4.44) | 85.13 -> 86.84 (+1.71) |
+| popular | 81.88 -> 85.38 (+3.50) | 82.53 -> 80.87 (**-1.66**) |
+| adversarial | 78.96 -> 80.88 (+1.92) | 76.77 -> 75.33 (**-1.44**) |
+
+Not one number matches, and the sign flips on two splits: VCD helps in its own
+paper and hurts in Fox's. Numbers that disagree that strongly cannot have been
+copied. The harness agrees — `pope_eval.py` carries `--use-vcd`, `--use-icd`
+and `--opera` flags, and `vcd_sample.py:153` comments its shared path
+`# for VCD and SID`, with a leftover author path pointing at
+`/home/kdzlys/sid2/log/`.
+
+The one exception is **CausalMM**, which appears nowhere in the released
+repository and cannot be run from it. Whether its row was re-run elsewhere or
+taken from its own paper is not determinable from what was published.
+
+**Re-running them is also not available to us.** ICD, SID, OPERA and CausalMM
+each need their own codebase; what this repo can run is VCD's noised branch
+inside Fox's fusion, which is not VCD (see the VCD-noise note above). So
+"reproduce the baselines too" would be three or four separate reproductions,
+each answering a question this project is not asking.
+
+Worth recording for the write-up: VCD's paper reports a standard deviation
+beside every number (`83.29(±0.35)`). Fox claims "a two-sided t-test
+(p < 0.05)" over "10 independent runs" (C.2) and prints variance nowhere. A
+paper in the same line of work, three years earlier, met the reporting
+standard this one skips.
+
 ### 3.6 Hyperparameter defaults come from the code, not the paper
 
 They disagree. We default to the code, and record which source was used.
@@ -268,7 +314,8 @@ hyperparameters" despite Algorithm 1 taking it as an input.
 | | Why |
 |---|---|
 | InstructBLIP path | It is a **second, divergent copy** of the intervention (`minigpt4/models/modeling_llama.py`) that drops `m_sys` from Eq. 4 entirely and uses layers 4–10 with k=0.4. A different method, not a backbone swap. |
-| Shikra path | No maintained HF conversion, and the release identifies its visual span by the magic numbers `img_s == 33 and img_e == 290`. |
+| Shikra path | `shikras/shikra-7b-delta-v1` is public, but it is a **delta** needing `huggyllama/llama-7b` merged in (27 GB of download, ~40 GB transient disk). The blocker is not size — it is 7B, the same as the LLaVA-1.5 already running here. It is that transformers has no Shikra class, so it needs the release's `minigpt4/models/modeling_shikra.py`, which needs transformers 4.29.2, which needs Python 3.10. Kaggle is 3.13. Shikra is a different host, not another session. The release also finds its visual span by the magic numbers `img_s == 33 and img_e == 290`. |
+| InstructBLIP path, practically | `Salesforce/instructblip-vicuna-7b` is public and transformers ships `InstructBlipForConditionalGeneration`, so unlike Shikra it can run on the modern stack. Costs: 31.7 GB to download (stored fp32; ~15.8 GB in VRAM once cast, which 2x T4 holds sharded). The work is porting, not hosting — see the row above on the second intervention copy, and note the visual span is **32 Q-Former query tokens**, not 576 patch tokens, so `H_vis` is an entropy over 32 positions instead of 576. |
 | FastV / OPERA plumbing | Present in the release as argparse flags, all `default=False`, with no reweighting behind the SID one. |
 | HF `logits_processor` | We apply the warpers (temperature, top-p) but not the processor list, which is empty by default for this configuration. |
 | `use_phj` | Dead code: set on every layer, read nowhere. |

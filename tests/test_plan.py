@@ -155,6 +155,41 @@ class TestPlanShape(unittest.TestCase):
                     continue
                 self.assertIn((job.benchmark, job.branches), COST_S)
 
+    def test_no_job_would_resume_another_arms_run_file(self) -> None:
+        """A run file must belong to the job whose name produces it.
+
+        This caught a real one. `vcd` meant the Fox-fusion hybrid in rounds
+        1-5 and now means VCD, and `method` is part of the file NAME while
+        the variant hash is identical -- so the new real-VCD job's file name
+        was byte-identical to an archived hybrid file. scan_progress marked
+        the job finished and six VCD jobs dropped out of the plan without a
+        word; a run launched anyway would have resumed from the hybrid's 3000
+        records, skipped every sample, and reported a finished "VCD" row
+        carrying the hybrid's numbers. Nothing downstream would have caught
+        it, because the method field agreed.
+
+        Fixed by scripts/relabel_vcd_fox_fusion.py. This is the test that
+        says so, and that catches the next one.
+        """
+        import json
+        import os
+
+        for job in PLAN:
+            path = Path("results/runs") / job.run_key().filename()
+            if not path.is_file():
+                continue
+            with open(path, "rb") as fh:
+                first = fh.readline()
+            if not first.strip():
+                continue
+            recorded = json.loads(first).get("method")
+            with self.subTest(job=job.job_id(), run=os.path.basename(path)):
+                self.assertEqual(
+                    recorded, job.method,
+                    f"{job.job_id()} would resume a run recorded as "
+                    f"{recorded!r}",
+                )
+
     def test_a_beam_job_costs_more_the_longer_it_generates(self) -> None:
         """OPERA is the only arm whose bill scales with max_new_tokens.
 

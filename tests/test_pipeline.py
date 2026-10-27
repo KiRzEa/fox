@@ -841,13 +841,24 @@ class TestLegacyMethodRelabelling(TestResumeAcrossCommits):
         self.assertEqual(meta["method"], "fox")
         self.assertNotIn("method_variant", meta)
 
-    def test_the_archived_files_actually_relabel(self) -> None:
-        """Not a synthetic record: the six real files in results/runs/."""
+    def test_the_archive_carries_the_corrected_label(self) -> None:
+        """Not a synthetic record: the six real hybrid files in results/runs/.
+
+        They were renamed and relabelled by
+        scripts/relabel_vcd_fox_fusion.py, because `method` is part of the
+        file name and leaving them as `vcd` made the new real-VCD job resume
+        them. The read-time map stays as a belt for any copy that was taken
+        before that ran.
+        """
         import glob
 
         from foxrepro.bench.evaluate import read_run
 
-        files = sorted(glob.glob("results/runs/m-vcd__*.jsonl"))
+        self.assertEqual(
+            glob.glob("results/runs/m-vcd__*.jsonl"), [],
+            "a file is still named for the old meaning of `vcd`",
+        )
+        files = sorted(glob.glob("results/runs/m-vcd_fox_fusion__*.jsonl"))
         if not files:
             self.skipTest("archive not present in this checkout")
         self.assertEqual(len(files), 6)
@@ -855,6 +866,7 @@ class TestLegacyMethodRelabelling(TestResumeAcrossCommits):
             with self.subTest(run=f):
                 _, meta = read_run(f, strict=True)
                 self.assertEqual(meta["method"], "vcd_fox_fusion")
+                self.assertEqual(meta["method_variant"], "vcd-noise-fox-fusion")
 
     def test_an_unrelabelled_pair_passes_through(self) -> None:
         from foxrepro.bench.evaluate import canonical_method

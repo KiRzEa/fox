@@ -62,6 +62,7 @@ def cfg_from_command(cmd: str) -> GenConfig:
         # flag would hide a run-file mismatch rather than catch one.
         max_new_tokens=int(str(args["max_new_tokens"]))
         if args.get("max_new_tokens") else MAX_NEW_TOKENS_DEFAULT[str(bench)],
+        control=str(args["control"]) if args.get("control") else None,
         decoding=str(args["decoding"]),
         system_prompt_id=str(args["system_prompt"]),
         wrapper_id=str(args.get("wrapper") or "released"),

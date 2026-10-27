@@ -60,6 +60,7 @@ __all__ = [
     "add_diffusion_noise",
     "ct2s_keep",
     "ct2s_dropped_keys",
+    "CT2S_SELECT",
     "cf_shuffle_attention",
     "cf_weight_features",
 ]
@@ -506,6 +507,17 @@ def fuse(
 # --------------------------------------------------------------------------- #
 # SID: CT2S vision-token selection
 # --------------------------------------------------------------------------- #
+#: How CT2S picks the vision tokens the negative branch keeps.
+#:
+#: ``"lowest"`` is SID. The other two are validation arms, and the first of
+#: them is not invented here: ``topk(ATTENTION_RANK)`` sits commented out one
+#: line above the released call. That is FastV, which keeps the MOST-attended
+#: tokens to save compute -- the opposite set, and the alternative the author
+#: abandoned. If keeping the least-attended does not build a worse reader
+#: than keeping the most-attended, SID's premise does not hold on this stack.
+CT2S_SELECT = ("lowest", "highest", "random")
+
+
 def ct2s_keep(
     probs: torch.Tensor,
     img_start: int,
@@ -513,6 +525,8 @@ def ct2s_keep(
     *,
     rank: int = 100,
     row: int = 0,
+    select: str = "lowest",
+    generator: Optional[torch.Generator] = None,
 ) -> torch.Tensor:
     """The vision keys SID's negative branch keeps: the LEAST attended ones.
 
@@ -526,11 +540,18 @@ def ct2s_keep(
 
     Asserted equal to ``reference.reference_ct2s_keep_indices``.
     """
+    if select not in CT2S_SELECT:
+        raise ValueError(
+            f"select must be one of {CT2S_SELECT}, got {select!r}")
     avg = torch.mean(probs, dim=1)[row]          # over heads, then one row
     last = avg[-1]                               # the last query position
     img = last[img_start:img_end + 1]
-    k = min(int(rank), int(img.shape[0]))
-    return img.topk(k, largest=False).indices + img_start
+    n = int(img.shape[0])
+    k = min(int(rank), n)
+    if select == "random":
+        perm = torch.randperm(n, device=img.device, generator=generator)
+        return perm[:k] + img_start
+    return img.topk(k, largest=(select == "highest")).indices + img_start
 
 
 def ct2s_dropped_keys(

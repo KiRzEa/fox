@@ -205,6 +205,50 @@ VARIANT_FIELDS: tuple[str, ...] = (
     "logit_dtype", "softmax_dtype", "mode", "system_prompt_id", "wrapper_id",
 )
 
+#: Variant fields that are OMITTED from the run key when unset.
+#:
+#: Adding a name to VARIANT_FIELDS changes the payload every run key is
+#: hashed from, so it renames every file in results/runs/ and orphans the
+#: whole archive. These are included only when they carry a value, so a run
+#: that does not use one keeps exactly the name it had before the field
+#: existed. Asserted in tests/test_plan.py against the real archived names.
+#:
+#: `control` is the validation axis: the arms that exist to check whether a
+#: compared method is doing what its paper says, rather than to produce a
+#: table row. See CONTROL_ARMS.
+OPTIONAL_VARIANT_FIELDS: tuple[str, ...] = ("control",)
+
+#: Every legal value of `control`, with what it is for.
+#:
+#: These are not tuning knobs and not ablations of Fox. Each one answers a
+#: specific question about a compared method that this project implemented
+#: from source, and that the method's own paper does not answer:
+CONTROL_ARMS: Dict[str, str] = {
+    # "the negative branch is a WORSE model" is the premise all four
+    # contrastive methods share. Run it alone and find out.
+    "negative_only":
+        "run the negative branch as a single branch, with no contrast",
+    # SID keeps the LEAST-attended vision tokens; the keep-the-most line is
+    # commented out one line above it in the released source. That is FastV,
+    # and it is the alternative the author abandoned.
+    "sid_keep_most":
+        "CT2S keeping the most-attended vision tokens instead of the least",
+    "sid_random":
+        "CT2S keeping 100 uniformly random vision tokens",
+    # CausalMM's gain is 1/577 by construction. If a constant 1/577 does the
+    # same thing, the shuffle is decoration.
+    "cf_constant":
+        "CausalMM with the shuffled attention replaced by a constant 1/n_keys",
+    "cf_blind":
+        "CausalMM with the negative branch's image features zeroed",
+    # OPERA is three things at once: a beam search, a hard five-candidate
+    # restriction, and an attention bonus. These separate them.
+    "opera_unrestricted":
+        "OPERA's penalty without the five-candidate restriction",
+    "opera_no_penalty":
+        "OPERA's five-candidate restriction without the penalty",
+}
+
 #: Default generation length per benchmark, matching the reference code:
 #: POPE answers are a single token (yes/no), CHAIR captions are 512 tokens.
 MAX_NEW_TOKENS_DEFAULT: Dict[str, int] = {"pope": 1, "chair": 512}

@@ -292,6 +292,7 @@ def opera_generate(
     early_stopping: bool = False,
     collect_trace: bool = False,
     allow_unreachable_rollback: bool = False,
+    restrict_candidates: bool = True,
 ) -> Dict[str, Any]:
     """Beam search with OPERA's over-trust penalty. No rollback.
 
@@ -303,6 +304,12 @@ def opera_generate(
             downstream could see.
         num_attn_candidates: the hard per-beam candidate cap. Not a tuning
             knob -- see the module docstring.
+        restrict_candidates: ``False`` keeps the penalty but drops the
+            discard-the-vocabulary step, so ``log_softmax`` runs over the
+            whole vocabulary as stock beam search does. A validation arm, not
+            a variant: OPERA is three things at once -- a beam search, a hard
+            five-candidate restriction, and an attention bonus -- and with
+            ``penalty_weights=0`` this separates all three.
 
     Returns ``{"token_ids", "n_prompt_tokens", "n_gen_tokens", "image_span",
     "trace"?}``, the same shape ``fox_generate`` returns, so the benchmark
@@ -452,8 +459,12 @@ def opera_generate(
 
             # Discard the rest of the vocabulary and renormalise over the
             # survivors. REJECT_FLOOR is finite on purpose.
-            vec = torch.full_like(z, REJECT_FLOOR)
-            vec.scatter_(-1, cand_tokens, cand_scores)
+            if restrict_candidates:
+                vec = torch.full_like(z, REJECT_FLOOR)
+                vec.scatter_(-1, cand_tokens, cand_scores)
+            else:
+                vec = z.clone()
+                vec.scatter_(-1, cand_tokens, cand_scores)
             scores = F.log_softmax(vec, dim=-1)
             scores = scores + beam_scores[:, None].expand_as(scores)
 
@@ -508,6 +519,8 @@ def opera_generate(
         "n_gen_tokens": len(out_ids),
         "image_span": (img_start, img_end),
         "n_forwards_per_step": 1 + num_attn_candidates,
+        "restrict_candidates": restrict_candidates,
+        "penalty_weights": penalty_weights,
     }
     if collect_trace:
         result["trace"] = trace

@@ -138,6 +138,16 @@ class FoxState:
     #: Rows the mask applies to. None would mean "all rows", which for the
     #: batched dual pass would prune the clean branch too.
     sid_rows: Optional[torch.Tensor] = None
+    #: Which vision tokens CT2S keeps. ``"lowest"`` is SID; the others are
+    #: validation arms. ``"highest"`` is the line commented out one above it
+    #: in the released source -- that is FastV, and it is the alternative the
+    #: author abandoned. ``"random"`` asks whether the selection does any
+    #: work at all, the way Figure 8's random-head control does for Fox.
+    sid_select: str = "lowest"
+    #: Seeded, for ``sid_select="random"``. Without it the one component
+    #: whose purpose is randomness would be the part of a seeded run that
+    #: does not repeat.
+    sid_generator: Optional[torch.Generator] = None
     #: Refilled at layer ``sid_agg_layer - 1`` of every forward, and cleared
     #: by the decode loop before each one. ``None`` at a layer that needs it
     #: is an error, not a reason to skip the mask -- see _sid_dropped.
@@ -296,6 +306,7 @@ def _sid_read_ranking(
     FOX.sid_keep = ct2s_keep(
         probs, FOX.img_start, FOX.img_end,
         rank=FOX.sid_rank, row=FOX.sid_read_row(),
+        select=FOX.sid_select, generator=FOX.sid_generator,
     )
 
 
@@ -460,15 +471,37 @@ def _eager_vision_tower(tower: Any) -> Iterator[None]:
                 cfg._attn_implementation = previous
 
 
-def _cf_edit_other(attn: torch.Tensor, edit: str) -> torch.Tensor:
-    """The three non-default edits, which are the paper's ablation.
+#: Edits that are OURS, not CausalMM's: validation arms rather than ablations.
+CF_CONTROL_EDITS = ("constant", "blind")
 
-    Unreachable from the released code -- ``edit_attention``'s default is
-    ``shuffle`` and the call site passes nothing -- so they are implemented
-    straight from the reference rather than given their own kernel.
+
+def _cf_edit_other(attn: torch.Tensor, edit: str) -> torch.Tensor:
+    """The three non-default released edits, plus two controls of our own.
+
+    ``random`` / ``uniform`` / ``reversed`` are the paper's ablation and are
+    unreachable from the released code -- ``edit_attention``'s default is
+    ``shuffle`` and the call site passes nothing -- so they come straight
+    from the reference rather than getting their own kernel.
+
+    ``constant`` and ``blind`` are not CausalMM's. They exist because the
+    gain ``cf_weight_features`` applies has mean ``1/n_keys`` by construction
+    (each attention row is a softmax, so the matrix sums to n_rows and a
+    permutation cannot change a mean), which makes the negative branch close
+    to image-blind:
+
+    * ``constant`` replaces the shuffled attention with exactly ``1/n_keys``.
+      If it produces the same answers as ``shuffle``, then the shuffle is
+      decoration and only the magnitude does any work.
+    * ``blind`` zeroes the branch's visual features outright. If ``shuffle``
+      matches it too, CausalMM is a language-prior contrast and the vision
+      counterfactual is a description of something the code does not do.
     """
     from foxrepro.fox.reference import reference_edit_attention
 
+    if edit == "constant":
+        return torch.full_like(attn, 1.0 / attn.shape[-1])
+    if edit == "blind":
+        return torch.zeros_like(attn)
     return reference_edit_attention(attn, edit)
 
 
@@ -916,8 +949,10 @@ def fox_generate(
     sid: bool = False,
     sid_agg_layer: int = 2,
     sid_rank: int = 100,
+    sid_select: str = "lowest",
     cf_vision: bool = False,
     cf_edit: str = "shuffle",
+    negative_only: bool = False,
 ) -> Dict[str, Any]:
     """Generate with Fox: both branches batched, fused per token.
 
@@ -1003,11 +1038,20 @@ def fox_generate(
             "Each compared method is exactly one of them; stacking any two "
             "is not a published method and the result belongs to neither"
         )
-    if cf_vision and single_branch:
+    if negative_only and not single_branch:
         raise ValueError(
-            "cf_vision=True needs the negative branch; not single_branch")
-    if sid and single_branch:
-        raise ValueError("sid=True needs the negative branch; not single_branch")
+            "negative_only runs the negative branch INSTEAD of the pair, so "
+            "it needs single_branch=True"
+        )
+    if cf_vision and single_branch and not negative_only:
+        raise ValueError(
+            "cf_vision=True needs the negative branch; not single_branch. For "
+            "the validation arm that runs the counterfactual alone, pass "
+            "negative_only=True")
+    if sid and single_branch and not negative_only:
+        raise ValueError(
+            "sid=True needs the negative branch; not single_branch. For the "
+            "validation arm that runs CT2S alone, pass negative_only=True")
     if sid and sid_agg_layer < 1:
         raise ValueError(
             f"sid_agg_layer must be >= 1 (the ranking is read from the layer "
@@ -1066,9 +1110,16 @@ def fox_generate(
     # reading a blanked image rather than a reshuffled one) is visible in the
     # record instead of only in the score.
     cf_stats: Dict[str, float] = {}
+    # Which batch row carries the perturbation. Normally row 1, the negative
+    # branch of the pair. Under negative_only there is no pair -- the
+    # perturbed branch IS the run, so it is row 0 and nothing is subtracted
+    # from it. That arm answers the premise all four contrastive methods
+    # share and none of their papers reports: is the negative branch actually
+    # a WORSE model?
+    perturbed_row = 0 if negative_only else 1
     cf_ctx: Any = (
-        causalmm_vision(model, rows=(1,), edit=cf_edit, generator=gen,
-                        stats=cf_stats)
+        causalmm_vision(model, rows=(perturbed_row,), edit=cf_edit,
+                        generator=gen, stats=cf_stats)
         if cf_vision else contextlib.nullcontext()
     )
 
@@ -1080,7 +1131,9 @@ def fox_generate(
         eager_layers=eager_layers if eager_layers is not None else FOX.eager_layers,
         generator=gen,
         sid_enabled=sid, sid_agg_layer=sid_agg_layer, sid_rank=sid_rank,
-        sid_rows=torch.tensor([1], device=device) if sid else None,
+        sid_select=sid_select, sid_generator=gen,
+        sid_rows=(torch.tensor([perturbed_row], device=device)
+                  if sid else None),
         sid_keep=None,
     ), cf_ctx:
         for step in range(max_new_tokens):

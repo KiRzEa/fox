@@ -816,6 +816,20 @@ saturation does not matter; if they disagree, "OPERA's rollback trigger is an
 fp16 artefact" is a finding of the same kind as the γ result, not a bug we
 have to pick a side on.
 
+### 3.14 Validating what we ported
+
+Five of the six compared methods were implemented here from their own
+source. Bit-equality against a transcribed reference proves *our code ==
+their code*; it does not prove *their code == their paper*, and it proves
+nothing about whether a mechanism is active on the real model.
+
+`docs/VALIDATION.md` pre-registers six arms that would fail if a method were
+not doing what it claims — the negative branch run alone, the `alpha = 0`
+collapse, SID's direction and selection controls, CausalMM's
+constant/blind controls, OPERA's three-way decomposition, and a per-run
+divergence rate. They cost 6.8 h, they run **before** the table rows, and
+their readings are fixed in writing before any number arrives.
+
 ### 3.6 Hyperparameter defaults come from the code, not the paper
 
 They disagree. We default to the code, and record which source was used.

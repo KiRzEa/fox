@@ -188,6 +188,8 @@ class Job:
     #: the whole sequence, so the first token it picks depends on how many
     #: follow. It is in VARIANT_FIELDS, so the run file reflects it.
     max_new_tokens: Optional[int] = None
+    #: A validation arm rather than a table row; see storage.CONTROL_ARMS.
+    control: Optional[str] = None
     note: str = ""
 
     def template_id(self) -> str:
@@ -210,6 +212,8 @@ class Job:
             bits.append(self.decoding)
         if self.method == "fox" and self.mode != "as_implemented":
             bits.append(self.mode)
+        if self.control is not None:
+            bits.append(self.control)
         if self.logit_dtype != "native":
             bits.append(f"ld{self.logit_dtype}")
         if self.system_prompt_id != "llava_v1":
@@ -249,6 +253,9 @@ class Job:
 
     @property
     def branches(self) -> str:
+        if self.control == "negative_only":
+            # The whole point of that arm: no pair, so no second branch.
+            return "single"
         if self.method in BEAM_SEARCH:
             return "beam"
         if self.method in SPLIT_BRANCH:
@@ -287,6 +294,11 @@ class Job:
             "mode": self.mode, "system_prompt_id": self.system_prompt_id,
             "wrapper_id": self.wrapper_id,
         }
+        # Omitted when unset, so a run without a control keeps exactly the
+        # file name it had before the field existed -- see
+        # storage.OPTIONAL_VARIANT_FIELDS.
+        if self.control is not None:
+            variant["control"] = self.control
         return RunKey(
             method=self.method, benchmark=self.benchmark, split=self.split,
             seed=self.seed, dtype="fp16", variant_fields=variant,
@@ -313,6 +325,8 @@ class Job:
                           ("--tau-js", self.tau_js), ("--alpha", self.alpha)):
             if val is not None:
                 parts.append(f"{flag} {val:g}")
+        if self.control is not None:
+            parts.append(f"--control {self.control}")
         if self.max_new_tokens is not None:
             parts.append(f"--max-new-tokens {self.max_new_tokens}")
         if self.limit:
@@ -536,6 +550,83 @@ def _build_plan() -> List[Job]:
             jobs.append(Job("boost_visual", "fox", bench, split,
                             mode="boost_visual", gamma=4.0, seed=seed,
                             note="amplify visual attention, delta=4, sampling"))
+
+    # ---- Round 6, gate: do the ported methods work before we trust them? --- #
+    # ---- Validation tier: is each ported method doing what its paper says?
+    #
+    # Bit-equality against a transcribed reference proves "our code == their
+    # code". It does NOT prove "their code == the description in the paper",
+    # and it proves nothing about whether the mechanism is active on the real
+    # model. Five of the six compared methods here were implemented from
+    # source by this project, so that gap has to be closed by measurement.
+    #
+    # Every job below is cheap, and every one is FALSIFIABLE -- each has a
+    # stated outcome that, if it does not happen, means the method is not
+    # doing what it claims.
+
+    # V1. The premise all four contrastive methods share: "the negative
+    #     branch is a WORSE model, so subtracting it helps". Run each
+    #     negative branch alone, with no contrast. PREDICTION: every one of
+    #     these must score BELOW the sampling baseline. One that does not is
+    #     a branch whose subtraction cannot be doing what the paper says.
+    #     None of the four papers reports this number.
+    for method in ("vcd", "icd", "sid", "causalmm"):
+        jobs.append(Job("validation", method, "pope", "adversarial",
+                        control="negative_only",
+                        note="the negative branch alone; must be worse than baseline"))
+
+    # V2. The formula. At alpha = 0, (1 + a) z_obs - a z_cd collapses to
+    #     z_obs, so the output must be TOKEN-IDENTICAL to the sampling
+    #     baseline at the same seed -- not close, identical. A sign error, a
+    #     mis-scoped branch or a leaked perturbation all break exactness
+    #     while leaving the accuracy plausible. 500 samples is plenty: one
+    #     differing token fails it.
+    for method in ("vcd", "icd", "sid", "causalmm"):
+        jobs.append(Job("validation", method, "pope", "adversarial",
+                        alpha=0.0, limit=500,
+                        note="alpha=0 must reproduce the baseline token for token"))
+
+    # V3. SID's direction and selection. The released source has
+    #     `topk(ATTENTION_RANK)` commented out one line above the call it
+    #     uses -- that is FastV, which keeps the MOST-attended tokens.
+    #     PREDICTION: keeping the least-attended must build a worse reader
+    #     than keeping the most-attended. And if keeping 100 RANDOM tokens
+    #     builds an equally bad one, then CT2S's selection does no work and
+    #     the method is "drop 476 vision tokens" -- the same control Figure 8
+    #     applies to Fox's head scoring.
+    for control in ("sid_keep_most", "sid_random"):
+        jobs.append(Job("validation", "sid", "pope", "adversarial",
+                        control=control,
+                        note=f"CT2S direction control: {control}"))
+
+    # V4. CausalMM's gain is 1/n_keys by construction: each attention row is
+    #     a softmax, so the matrix sums to n_rows and a permutation cannot
+    #     change a mean. Measured at 0.00172 against 1/577 = 0.00173, which
+    #     makes the negative branch close to image-blind.
+    #     PREDICTION: if `constant` (exactly 1/n_keys) and `blind` (features
+    #     zeroed) give the same answers as `shuffle`, the vision
+    #     counterfactual is a description of something the code does not do,
+    #     and CausalMM is a language-prior contrast.
+    for control in ("cf_constant", "cf_blind"):
+        jobs.append(Job("validation", "causalmm", "pope", "adversarial",
+                        control=control, limit=500,
+                        note=f"is the shuffle load-bearing? {control}"))
+
+    # V5. OPERA is three things at once: a beam search, a hard five-candidate
+    #     restriction, and an attention bonus. These two rows separate them --
+    #     whatever the restriction alone buys is `opera_no_penalty` minus a
+    #     plain beam search, and whatever the penalty alone buys is
+    #     `opera_unrestricted` minus the same.
+    #     PREDICTION, from the diagnostic the ported run already records: the
+    #     bonus is added in LOGIT space and its spread across the five
+    #     candidates is tiny next to their logit spread, so `opera_no_penalty`
+    #     should land on top of plain OPERA. If it does, OPERA's POPE number
+    #     is beam search with a truncated candidate set.
+    for control in ("opera_unrestricted", "opera_no_penalty"):
+        jobs.append(Job("validation", "opera", "pope", "adversarial",
+                        decoding="greedy", control=control,
+                        note=f"OPERA decomposition: {control}"))
+
 
     # ---- Round 6: the compared methods, as themselves --------------------- #
     # Tables 1, 2 and 8 put Fox against Sampling, VCD, ICD, OPERA, CausalMM and

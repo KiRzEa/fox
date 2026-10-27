@@ -553,6 +553,20 @@ class _ContrastiveMethod(_LlavaMethod):
     cd_alpha: ClassVar[float] = 1.0
     cd_beta: ClassVar[float] = 0.1
 
+    #: Validation arms this method understands. Checked at construction, not
+    #: ignored: a control aimed at the wrong method would otherwise produce a
+    #: run file NAMED for a control that never happened, which is the worst
+    #: outcome available to a validation arm.
+    CONTROLS: ClassVar[frozenset] = frozenset({"negative_only"})
+
+    def __init__(self, cfg: GenConfig) -> None:
+        super().__init__(cfg)
+        if cfg.control is not None and cfg.control not in self.CONTROLS:
+            raise ValueError(
+                f"control {cfg.control!r} does not apply to {self.name}; "
+                f"known here: {sorted(self.CONTROLS)}"
+            )
+
     def _negative(self, inputs: Dict[str, Any], sample: Sample,
                   prompt: str, generator: Any) -> Dict[str, Any]:
         raise NotImplementedError
@@ -573,7 +587,29 @@ class _ContrastiveMethod(_LlavaMethod):
 
     def _record(self) -> Dict[str, Any]:
         """Every resolved hyperparameter, for ``extra`` and ``describe``."""
-        return dict(self._decode_kwargs())
+        d = dict(self._decode_kwargs())
+        if self.cfg.control is not None:
+            d["control"] = self.cfg.control
+        return d
+
+    def _as_negative_branch(self, inputs: Dict[str, Any],
+                            neg: Dict[str, Any]):
+        """Move the perturbation onto the branch that will actually be run.
+
+        An external perturbation (VCD's image, ICD's prompt) replaces the
+        clean input. An internal one (SID's CT2S, CausalMM's counterfactual)
+        stays a keyword and ``fox_generate`` applies it to row 0 instead of
+        row 1, because under ``negative_only`` there is no row 1.
+        """
+        inputs, neg = dict(inputs), dict(neg)
+        if "pixel_values_do" in neg:
+            inputs["pixel_values"] = neg.pop("pixel_values_do")
+        elif "input_ids_do" in neg:
+            inputs["input_ids"] = neg.pop("input_ids_do")
+            mask = neg.pop("attn_mask_do", None)
+            if mask is not None:
+                inputs["attention_mask"] = mask
+        return inputs, neg
 
     def generate(self, sample: Sample, prompt: str) -> MethodOutput:
         import torch
@@ -594,19 +630,32 @@ class _ContrastiveMethod(_LlavaMethod):
             gen.manual_seed(seed)
 
         neg = self._negative(inputs, sample, prompt, gen)
-        result = self._attn.fox_generate(
-            self.model, inputs,
+        shared = dict(
             max_new_tokens=cfg.max_new_tokens,
             greedy=(cfg.decoding == "greedy"),
             top_p=cfg.top_p, temperature=cfg.temperature,
             logit_dtype=cfg.logit_dtype, softmax_dtype=cfg.softmax_dtype,
             eager_layers=self._eager_layers, seed=seed, collect_trace=True,
-            single_branch=False,
             # The intervention is OFF: the perturbation IS the method. Leaving
             # Fox's head edit on would make this Fox-plus-a-noisy-image.
-            mode="off", fusion="contrastive",
-            **self._decode_kwargs(), **neg,
+            mode="off",
         )
+        if cfg.control == "negative_only":
+            # No contrast at all: run what the method SUBTRACTS, on its own.
+            # Every one of these four says the negative branch is a worse
+            # model; this is the arm that checks it, and none of the four
+            # papers reports it.
+            inputs, neg = self._as_negative_branch(inputs, neg)
+            result = self._attn.fox_generate(
+                self.model, inputs, single_branch=True, negative_only=True,
+                **shared, **neg,
+            )
+        else:
+            result = self._attn.fox_generate(
+                self.model, inputs, single_branch=False,
+                fusion="contrastive",
+                **shared, **self._decode_kwargs(), **neg,
+            )
         text = self.processor.tokenizer.decode(
             result["token_ids"], skip_special_tokens=True
         ).strip()
@@ -617,6 +666,14 @@ class _ContrastiveMethod(_LlavaMethod):
             "n_steps": len(trace),
             **self._record(),
         }
+        if trace and self.cfg.control != "negative_only":
+            # Did the contrastive rule change the decision, and how often? A
+            # method that never diverges from its own observational branch is
+            # not running; one that diverges on every token is broken. Both
+            # are invisible in an accuracy number.
+            n_div = sum(1 for t in trace if t.get("diverged"))
+            extra["n_diverged"] = n_div
+            extra["diverged_frac"] = n_div / len(trace)
         if "sid_n_kept" in result:
             # Per-step, because the keep-set is recomputed per step. A run
             # whose min and max are not both `sid_rank` either hit the clamp
@@ -792,6 +849,27 @@ class SIDMethod(_ContrastiveMethod):
             int(extra.get("sid_rank", type(self).rank)),
             type(self).rank))
 
+    CONTROLS: ClassVar[frozenset] = frozenset(
+        {"negative_only", "sid_keep_most", "sid_random"})
+
+    #: ``control`` -> which vision tokens CT2S keeps.
+    SELECT_BY_CONTROL: ClassVar[Dict[Optional[str], str]] = {
+        None: "lowest",
+        "negative_only": "lowest",
+        "sid_keep_most": "highest",
+        "sid_random": "random",
+    }
+
+    def select(self) -> str:
+        """``"lowest"`` is SID; the others are validation arms."""
+        try:
+            return self.SELECT_BY_CONTROL[self.cfg.control]
+        except KeyError:
+            raise ValueError(
+                f"control {self.cfg.control!r} does not apply to sid; "
+                f"known here: {sorted(k for k in self.SELECT_BY_CONTROL if k)}"
+            ) from None
+
     def _negative(self, inputs, sample, prompt, generator):
         """Nothing external to build: the perturbation is inside the model.
 
@@ -803,12 +881,14 @@ class SIDMethod(_ContrastiveMethod):
             "sid": True,
             "sid_agg_layer": self.agg_layer,
             "sid_rank": self.rank,
+            "sid_select": self.select(),
         }
 
     def _record(self) -> Dict[str, Any]:
         d = super()._record()
         d["sid_agg_layer"] = self.agg_layer
         d["sid_rank"] = self.rank
+        d["sid_select"] = self.select()
         return d
 
 
@@ -859,13 +939,33 @@ class CausalMMMethod(_ContrastiveMethod):
             str((cfg.extra or {}).get("cf_edit", type(self).edit)),
             type(self).edit))
 
+    CONTROLS: ClassVar[frozenset] = frozenset(
+        {"negative_only", "cf_constant", "cf_blind"})
+
+    #: ``control`` -> which edit the counterfactual branch gets.
+    EDIT_BY_CONTROL: ClassVar[Dict[Optional[str], str]] = {
+        None: CAUSALMM_EDIT_METHOD,
+        "negative_only": CAUSALMM_EDIT_METHOD,
+        "cf_constant": "constant",
+        "cf_blind": "blind",
+    }
+
+    def resolved_edit(self) -> str:
+        try:
+            return self.EDIT_BY_CONTROL[self.cfg.control] or self.edit
+        except KeyError:
+            raise ValueError(
+                f"control {self.cfg.control!r} does not apply to causalmm; "
+                f"known here: {sorted(k for k in self.EDIT_BY_CONTROL if k)}"
+            ) from None
+
     def _negative(self, inputs, sample, prompt, generator):
         """Nothing external: the counterfactual is built inside the encoder."""
-        return {"cf_vision": True, "cf_edit": self.edit}
+        return {"cf_vision": True, "cf_edit": self.resolved_edit()}
 
     def _record(self) -> Dict[str, Any]:
         d = super()._record()
-        d["cf_edit"] = self.edit
+        d["cf_edit"] = self.resolved_edit()
         return d
 
     def describe(self) -> Dict[str, Any]:
@@ -917,6 +1017,18 @@ class OPERAMethod(_LlavaMethod):
     num_attn_candidates: ClassVar[int] = 5
     penalty_weights: ClassVar[float] = 1.0
 
+    #: ``control`` -> (restrict the candidate set?, penalty weight).
+    #:
+    #: OPERA is three things at once. With the plain arm these two rows
+    #: separate them: whatever the restriction alone buys is
+    #: ``opera_no_penalty`` minus a plain beam search, and whatever the
+    #: penalty alone buys is ``opera_unrestricted`` minus the same.
+    CONTROL_SETTINGS: ClassVar[Dict[Optional[str], Any]] = {
+        None: (True, penalty_weights),
+        "opera_unrestricted": (False, penalty_weights),
+        "opera_no_penalty": (True, 0.0),
+    }
+
     def __init__(self, cfg: GenConfig) -> None:
         super().__init__(cfg)
         if cfg.decoding == "sampling":
@@ -925,6 +1037,13 @@ class OPERAMethod(_LlavaMethod):
                 "paper prints the same numbers in its sampling and greedy "
                 "tables. Run it with --decoding greedy"
             )
+        try:
+            self.restrict, self.weight = self.CONTROL_SETTINGS[cfg.control]
+        except KeyError:
+            raise ValueError(
+                f"control {cfg.control!r} does not apply to opera; known "
+                f"here: {sorted(k for k in self.CONTROL_SETTINGS if k)}"
+            ) from None
 
     def _decode_kwargs(self) -> Dict[str, Any]:  # pragma: no cover - unused
         """Never called: this method does not go through ``fox_generate``."""
@@ -940,7 +1059,8 @@ class OPERAMethod(_LlavaMethod):
             max_new_tokens=cfg.max_new_tokens,
             num_beams=self.num_beams,
             num_attn_candidates=self.num_attn_candidates,
-            penalty_weights=self.penalty_weights,
+            penalty_weights=self.weight,
+            restrict_candidates=self.restrict,
             collect_trace=True,
         )
         text = self.processor.tokenizer.decode(
@@ -972,12 +1092,16 @@ class OPERAMethod(_LlavaMethod):
         )
 
     def _record(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "num_beams": self.num_beams,
             "num_attn_candidates": self.num_attn_candidates,
-            "penalty_weights": self.penalty_weights,
+            "penalty_weights": self.weight,
+            "restrict_candidates": self.restrict,
             "rollback": False,
         }
+        if self.cfg.control is not None:
+            d["control"] = self.cfg.control
+        return d
 
     def describe(self) -> Dict[str, Any]:
         info = dict(super().describe())

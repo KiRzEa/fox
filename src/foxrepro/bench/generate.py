@@ -70,6 +70,7 @@ from foxrepro.storage import (  # noqa: E402
     BENCHMARK_SPLITS, DTYPES, INTERVENTION_MODES, LOGIT_DTYPES,
     MAX_NEW_TOKENS_DEFAULT, PROVENANCE_FIELDS, SOFTMAX_DTYPES,
     SYSTEM_PROMPT_IDS, VARIANT_FIELDS, WRAPPER_IDS,
+    CONTROL_ARMS, OPTIONAL_VARIANT_FIELDS,
     RunKey, git_commit_hash, paths,
 )
 
@@ -137,6 +138,10 @@ class GenConfig:
     logit_dtype: str = "native"     # "native" == same as ``dtype``
     softmax_dtype: str = "fp32"     # what every HF version actually does
     mode: str = "as_implemented"    # see storage.INTERVENTION_MODES
+    #: A validation arm rather than a table row: see storage.CONTROL_ARMS.
+    #: Optional in the run key, so leaving it unset keeps a run's file name
+    #: byte-identical to what it was before this field existed.
+    control: Optional[str] = None
     # --- sharding (Kaggle T4x2 is the primary host) ----------------------- #
     # A single T4 cannot hold the model in fp16 (13.16 GiB of weights against
     # ~14.3 GiB usable), but two can when the layers are split across them.
@@ -177,15 +182,38 @@ class GenConfig:
                 f"prompt template {self.prompt_template_id!r} does not belong "
                 f"to benchmark {self.benchmark!r}"
             )
+        if self.control is not None and self.control not in CONTROL_ARMS:
+            raise ValueError(
+                f"unknown control {self.control!r}; known: "
+                f"{sorted(CONTROL_ARMS)}"
+            )
         if self.max_new_tokens < 1:
             raise ValueError("max_new_tokens must be >= 1")
+
+    def _variant_fields(self) -> Dict[str, Any]:
+        """The payload the run file's name is hashed from.
+
+        Optional fields are omitted when unset, on purpose: including
+        ``"control": null`` everywhere would change the hash of every run
+        this project has ever produced and orphan the 171 files in
+        results/runs/. A run that uses no control therefore keeps exactly
+        the name it had before the field existed.
+        """
+        fields: Dict[str, Any] = {
+            n: getattr(self, n, None) for n in VARIANT_FIELDS
+        }
+        for n in OPTIONAL_VARIANT_FIELDS:
+            value = getattr(self, n, None)
+            if value is not None:
+                fields[n] = value
+        return fields
 
     def run_key(self) -> RunKey:
         """The :class:`RunKey` identifying this run's JSONL file."""
         return RunKey(
             method=self.method, benchmark=self.benchmark, split=self.split,
             seed=self.seed, dtype=self.dtype,
-            variant_fields={n: getattr(self, n, None) for n in VARIANT_FIELDS},
+            variant_fields=self._variant_fields(),
         )
 
     def provenance(self) -> Dict[str, Any]:
@@ -201,6 +229,7 @@ class GenConfig:
             "decoding": self.decoding, "top_p": self.top_p,
             "temperature": self.temperature,
             "intervention_layers": self.intervention_layers,
+            "control": self.control,
             "logit_dtype": self.logit_dtype,
             "softmax_dtype": self.softmax_dtype,
             "mode": self.mode,
@@ -999,6 +1028,12 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--dry-run", action="store_true",
                     help="use the CPU-only 'echo' method (pipeline smoke test)")
     ap.add_argument("--no-fsync", action="store_true", help="tests only")
+    ap.add_argument(
+        "--control", choices=sorted(CONTROL_ARMS), default=None,
+        help="a VALIDATION arm, not a table row: these answer whether a "
+             "compared method is doing what its paper says. "
+             + "; ".join(f"{k}: {v}" for k, v in sorted(CONTROL_ARMS.items())),
+    )
     ap.add_argument("--list-methods", action="store_true")
     return ap
 
@@ -1028,6 +1063,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         system_prompt_id=args.system_prompt,
         wrapper_id=args.wrapper,
         allow_cpu=args.allow_cpu,
+        control=args.control,
     )
     # Must happen before any model is loaded: cudnn.allow_tf32 defaults to
     # True, and on Ampere+ a TF32 matmul has ~10 mantissa bits, which would

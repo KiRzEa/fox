@@ -126,7 +126,7 @@ python -m foxrepro.storage --ensure || die "storage layout failed"
 say "6/7  COCO subset + POPE annotations"
 python - <<'PY'
 import json, sys
-from storage import paths, readiness_report
+from foxrepro.storage import paths, readiness_report
 p = paths()
 rep = readiness_report(p)
 c = rep["checks"]
@@ -150,10 +150,29 @@ PY
 
 if python -c "
 import sys
-from storage import paths
+from foxrepro.storage import paths
 raise SystemExit(0 if paths().coco_subset_tar.is_file() else 1)" 2>/dev/null; then
   python -m foxrepro.data.build_coco_subset extract || warn "extract failed"
   python -m foxrepro.data.build_coco_subset verify --level fast || warn "verify failed"
+else
+  # No attached tar. Fetch exactly the images the plan needs straight from
+  # COCO rather than leaving the session NOT READY with a build instruction
+  # the operator has to go and find: the union of POPE's and CHAIR's image
+  # sets is under 3000 files and ~460 MB, which is about six minutes, against
+  # the documented 6.2 GB val2014 zip. Idempotent -- already-present files
+  # are skipped, so a re-run after a dead session costs nothing.
+  if python -c "
+import sys
+from foxrepro.storage import paths
+raise SystemExit(0 if any(paths().coco_images_dir.glob('*.jpg')) else 1)" 2>/dev/null; then
+    echo "  images already present; skipping the fetch"
+  else
+    warn "no subset tar attached -- fetching the needed images from COCO."
+    warn "Attach the checksummed tar as a read-only Kaggle Dataset to make"
+    warn "later sessions cost nothing here."
+    python -m foxrepro.data.fetch_images --what union \
+      || warn "image fetch failed -- the readiness gate below will say so"
+  fi
 fi
 
 # --------------------------------------------------------------- 7. model ---
@@ -180,7 +199,7 @@ fi
 say "Readiness"
 python - <<'PY'
 import sys
-from storage import paths, readiness_report
+from foxrepro.storage import paths, readiness_report
 rep = readiness_report(paths())
 ready = rep["ready_for_generation"]
 print("  READY" if ready else "  NOT READY")
@@ -189,7 +208,9 @@ if not ready:
     if not c["pope_files"]:
         print("   - POPE annotations missing from data/pope/ (see its README)")
     if not c["n_local_images"]:
-        print("   - no COCO images extracted locally (build/attach the subset tar)")
+        print("   - no COCO images locally. Step 6 tries to fetch them; if it")
+        print("     failed, run it directly and read the error:")
+        print("       python -m foxrepro.data.fetch_images --what union")
     sys.exit(1)
 PY
 RC=$?

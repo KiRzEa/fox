@@ -54,7 +54,7 @@ warn() { printf '  !! %s\n' "$*" >&2; }
 
 # --------------------------------------------------------------- 1. environment
 say "1/7 environment"
-FOX_ENV_DETECTED="$("$PYTHON" -c 'import storage; print(storage.detect_environment())')"
+FOX_ENV_DETECTED="$("$PYTHON" -c 'import foxrepro.storage as storage; print(storage.detect_environment())')"
 echo "  detected: ${FOX_ENV_DETECTED}"
 echo "  python  : $("$PYTHON" -c 'import sys; print(sys.version.split()[0])')"
 if command -v nvidia-smi >/dev/null 2>&1; then
@@ -78,9 +78,9 @@ PYMOUNT
   [[ -d /content/drive/MyDrive ]] || { warn "Drive mount failed"; exit 1; }
 fi
 "$PYTHON" storage.py --ensure >/dev/null
-PERSIST_ROOT="$("$PYTHON" -c 'import storage; print(storage.paths().persist_root)')"
-LOCAL_ROOT="$("$PYTHON" -c 'import storage; print(storage.paths().local_root)')"
-HF_CACHE="$("$PYTHON" -c 'import storage; print(storage.paths().hf_home)')"
+PERSIST_ROOT="$("$PYTHON" -c 'import foxrepro.storage as storage; print(storage.paths().persist_root)')"
+LOCAL_ROOT="$("$PYTHON" -c 'import foxrepro.storage as storage; print(storage.paths().local_root)')"
+HF_CACHE="$("$PYTHON" -c 'import foxrepro.storage as storage; print(storage.paths().hf_home)')"
 echo "  persistent: ${PERSIST_ROOT}"
 echo "  local     : ${LOCAL_ROOT}"
 
@@ -107,7 +107,7 @@ say "4/7 directory layout"
 
 # --------------------------------------------------------------- 5. COCO subset
 say "5/7 COCO val2014 subset"
-TAR_PATH="$("$PYTHON" -c 'import storage; print(storage.paths().coco_subset_tar)')"
+TAR_PATH="$("$PYTHON" -c 'import foxrepro.storage as storage; print(storage.paths().coco_subset_tar)')"
 if [[ ! -f "$TAR_PATH" ]]; then
   warn "no subset tar at ${TAR_PATH}"
   warn "build it once on a machine that has the full val2014 download:"

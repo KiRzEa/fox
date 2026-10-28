@@ -830,6 +830,60 @@ constant/blind controls, OPERA's three-way decomposition, and a per-run
 divergence rate. They cost 6.8 h, they run **before** the table rows, and
 their readings are fixed in writing before any number arrives.
 
+### 3.15 The host's transformers is not the development box's
+
+`requirements-trackB.lock` pins `transformers>=4.57.6,<6` on purpose: the
+capability the project needs is `AttentionInterface`, and forcing a
+downgrade on a host that already has a working stack costs an hour per
+session for nothing. The price of that choice is that the host's build
+moves, and it moved: **Kaggle shipped transformers 5.16.1 and Python 3.13
+against a development environment on 4.57.6 and Python 3.9**, and 5.16.1 is
+not installable on 3.9, so the suite cannot be run against it locally.
+
+Three things differed, and all three cost GPU time in round 6 session 1:
+
+1. **`LlavaModel.get_image_features` changed shape.** 4.57.x returns the
+   per-image list and `forward` cats it; 5.16.x returns the vision-outputs
+   object with that list on `.pooler_output` and `forward` unwraps it.
+   CausalMM's wrapper returned the 4.x shape and died inside transformers
+   with `'list' object has no attribute 'pooler_output'`. It now reads
+   `LlavaModel.forward`'s own source to decide which to return — a version
+   number would have to be mapped by hand and would be wrong the next time
+   the contract moves, and both versions' return value has a
+   `pooler_output` attribute, so duck-typing cannot tell them apart.
+2. **`transformers.generation.beam_search` is gone in 5.16.x.**
+   `BeamSearchScorer` cannot be imported on the host at all. OPERA already
+   carries its own bookkeeping, asserted equivalent to the library's where
+   the library still has one, so this cost nothing — but it would have been
+   a session.
+3. **`device_map="auto"` shards the model and index tensors do not travel.**
+   `FoxState.sid_rows` was a tensor on `next(model.parameters()).device`,
+   i.e. cuda:0, while layer 16's attention mask is on cuda:1:
+   *indices should be either on cpu or on the same device as the indexed
+   tensor*. Fox never hit it in 165 jobs because its window is layers 2–15,
+   which all land on the first shard; SID masks from layer 2 to the last and
+   failed on its first forward. Both `sid_rows` and `branch_rows` are now
+   plain tuples of ints, which index correctly on every shard.
+
+A fourth, unrelated to versions: VCD's noise generator lived on the model's
+device while `pixel_values` were still the processor's CPU tensors, so
+`normal_(generator=cuda_gen)` on a CPU tensor was refused. The contrastive
+methods now move their inputs to the model device once, before the negative
+branch is built.
+
+Checked against the 5.16.1 source and unaffected: `DynamicCache.crop`,
+`.reorder_cache` and `.get_seq_length` (OPERA's cache plumbing),
+`LlavaConfig.image_token_index`, and `LlamaAttention`'s `layer_idx` /
+`num_key_value_groups` / `head_dim`.
+
+`scripts/probe_host.py` now carries a `transformers_contracts` check that
+verifies each of these in milliseconds, so a host whose build has moved
+again fails in the setup cell rather than twenty minutes into a session.
+And `tests/test_tiny_llava.py` now runs a real `forward` with the CausalMM
+wrapper active rather than only asserting the shape it returns — a shape
+assertion just restates the branch, while a forward fails on any version
+whose contract the wrapper does not meet.
+
 ### 3.6 Hyperparameter defaults come from the code, not the paper
 
 They disagree. We default to the code, and record which source was used.

@@ -129,6 +129,65 @@ class TestGetImageFeaturesReconstruction(_Base):
         self.assertEqual(tower.config._attn_implementation, before)
 
 
+class TestTheWrapperSatisfiesTheInstalledContract(_Base):
+    """Call the model for real, with the wrapper active.
+
+    This is the test that was missing, and three GPU hours found out the
+    hard way. ``LlavaModel.get_image_features`` changed contract between
+    transformers 4.57.x (returns the per-image list) and 5.16.x (returns the
+    vision outputs object with the list on ``.pooler_output``), and a
+    wrapper returning the wrong shape dies inside transformers with
+    ``'list' object has no attribute 'pooler_output'`` -- a message that
+    names neither this project nor CausalMM.
+
+    Asserting the shape against whichever version is installed is not enough,
+    because that just restates the branch. Running a forward is: it fails on
+    any version whose contract the wrapper does not meet.
+    """
+
+    def test_a_real_forward_succeeds_with_the_counterfactual_active(self) -> None:
+        from foxrepro.fox.attention import causalmm_vision
+
+        ids = torch.full((2, 8 + N_IMG), 5, dtype=torch.long)
+        ids[:, 4:4 + N_IMG] = IMAGE_TOKEN_ID
+        with causalmm_vision(self.model, rows=(1,),
+                             generator=torch.Generator().manual_seed(2)):
+            with torch.no_grad():
+                out = self.model(
+                    input_ids=ids,
+                    attention_mask=torch.ones_like(ids),
+                    pixel_values=self.px,
+                )
+        self.assertEqual(out.logits.shape[0], 2)
+        # and the two rows read different images, which is the whole point
+        self.assertFalse(torch.equal(out.logits[0], out.logits[1]))
+
+    def test_the_unwrapped_forward_gives_identical_rows(self) -> None:
+        """The control for the test above: without the wrapper they agree."""
+        ids = torch.full((2, 8 + N_IMG), 5, dtype=torch.long)
+        ids[:, 4:4 + N_IMG] = IMAGE_TOKEN_ID
+        with torch.no_grad():
+            out = self.model(input_ids=ids,
+                             attention_mask=torch.ones_like(ids),
+                             pixel_values=self.px)
+        self.assertTrue(torch.equal(out.logits[0], out.logits[1]))
+
+    def test_the_contract_probe_reads_the_callers_source(self) -> None:
+        from foxrepro.fox.attention import _forward_reads_pooler_output
+
+        class Old:
+            def forward(self):
+                image_features = self.get_image_features()
+                return torch.cat(image_features, dim=0)
+
+        class New:
+            def forward(self):
+                return self.get_image_features(return_dict=True).pooler_output
+
+        self.assertFalse(_forward_reads_pooler_output(Old()))
+        self.assertTrue(_forward_reads_pooler_output(New()))
+
+
 class TestCausalMMCounterfactual(_Base):
     def wrapped(self, **kw):
         stats: dict = {}

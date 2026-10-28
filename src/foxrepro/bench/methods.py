@@ -614,16 +614,26 @@ class _ContrastiveMethod(_LlavaMethod):
     def generate(self, sample: Sample, prompt: str) -> MethodOutput:
         import torch
 
-        inputs = dict(self._prepare(sample, prompt))
         cfg = self.cfg
         seed = None if cfg.seed is None else (
             cfg.seed * 1_000_003 + hash(sample.sample_id) % 1_000_003
         )
-        # One generator for the perturbation and the sampler, seeded per
-        # sample: the released code draws the image noise from global RNG,
-        # which makes the one component whose purpose is randomness the one
-        # part of a seeded run that does not repeat.
+        # Move the inputs to the model's device BEFORE building the negative
+        # branch. The processor returns CPU tensors and `fox_generate` moves
+        # them later, but `_negative` runs first and perturbs them -- and a
+        # CUDA generator cannot fill a CPU tensor ("Expected a 'cpu' device
+        # type for generator but found 'cuda'"). Doing it once here also
+        # means every negative-branch builder sees the same device, rather
+        # than each having to remember.
         dev = getattr(self.model, "device", None)
+        inputs = {
+            k: (v.to(dev) if dev is not None and torch.is_tensor(v) else v)
+            for k, v in dict(self._prepare(sample, prompt)).items()
+        }
+        # One generator for the perturbation, seeded per sample: the released
+        # code draws the image noise from global RNG, which makes the one
+        # component whose purpose is randomness the one part of a seeded run
+        # that does not repeat.
         gen = None
         if seed is not None:
             gen = torch.Generator(device=dev) if dev is not None else torch.Generator()
@@ -731,6 +741,11 @@ class VCDMethod(_ContrastiveMethod):
         from foxrepro.fox.kernel import add_diffusion_noise
 
         px = inputs["pixel_values"]
+        if generator is not None and px.device != generator.device:
+            # Belt for the braces in _ContrastiveMethod.generate: torch
+            # refuses a generator whose device differs from the tensor being
+            # filled, and the message names neither this method nor VCD.
+            px = px.to(generator.device)
         noised = add_diffusion_noise(
             px.float(), self.noise_step, generator=generator
         ).to(px.dtype)

@@ -198,6 +198,94 @@ def check_preinstalled_stack() -> dict:
     return out
 
 
+def check_contracts() -> dict:
+    """The transformers internals this project reaches into, by shape.
+
+    A version floor is not enough. ``transformers`` is deliberately unpinned
+    here (requirements-trackB.lock: ``>=4.57.6,<6``) so the host's own build
+    is used, and the host's build moves: Kaggle shipped 5.16.1 against a
+    development environment on 4.57.6, and three things differed.
+
+    * ``LlavaModel.get_image_features`` returns the per-image list on 4.57.x
+      and the vision-outputs object with that list on ``.pooler_output`` on
+      5.16.x. CausalMM's wrapper has to return whichever the installed
+      ``forward`` unwraps; getting it wrong dies inside transformers with
+      ``'list' object has no attribute 'pooler_output'``.
+    * ``transformers.generation.beam_search`` is GONE in 5.16.x, so
+      ``BeamSearchScorer`` cannot be imported. OPERA carries its own
+      hypothesis bookkeeping for exactly this reason; this check records
+      whether the library's is still available to compare against.
+    * ``DynamicCache.crop`` is what undoes OPERA's speculative forwards.
+      Without it they would corrupt the search's own cache, and the run
+      would still produce fluent text.
+
+    Each costs a few milliseconds and fails here rather than twenty minutes
+    into a GPU session.
+    """
+    out: dict = {"check": "transformers_contracts", "contracts": {}}
+    c = out["contracts"]
+
+    try:
+        import inspect
+
+        from transformers.models.llava.modeling_llava import LlavaModel
+
+        src = inspect.getsource(LlavaModel.forward)
+        c["llava_forward_reads_pooler_output"] = ".pooler_output" in src
+        c["llava_get_image_features"] = hasattr(LlavaModel,
+                                                "get_image_features")
+    except BaseException as exc:  # noqa: BLE001
+        c["llava_forward_reads_pooler_output"] = None
+        c["llava_error"] = f"{type(exc).__name__}: {exc}"
+
+    try:
+        from transformers.cache_utils import DynamicCache
+
+        for name in ("crop", "reorder_cache", "get_seq_length"):
+            c[f"DynamicCache.{name}"] = hasattr(DynamicCache, name)
+    except BaseException as exc:  # noqa: BLE001
+        c["cache_error"] = f"{type(exc).__name__}: {exc}"
+
+    try:
+        from transformers.generation.beam_search import (  # noqa: F401
+            BeamSearchScorer,
+        )
+        c["BeamSearchScorer"] = True
+    except BaseException:  # noqa: BLE001
+        # Not a failure: OPERA uses this project's own scorer precisely
+        # because the library's is deprecated and then removed.
+        c["BeamSearchScorer"] = False
+
+    missing = [k for k in ("DynamicCache.crop", "DynamicCache.reorder_cache",
+                           "DynamicCache.get_seq_length")
+               if c.get(k) is False]
+    unknown = c.get("llava_forward_reads_pooler_output") is None
+
+    if missing or unknown:
+        out["status"] = "FAIL"
+        bits = []
+        if missing:
+            bits.append(f"missing {', '.join(missing)} -- OPERA cannot undo "
+                        f"its speculative forwards without them")
+        if unknown:
+            bits.append("could not read LlavaModel.forward, so CausalMM's "
+                        "wrapper cannot know what shape to return")
+        out["advice"] = "; ".join(bits)
+    else:
+        out["status"] = "PASS"
+        shape = ("pooler_output (transformers 5.x)"
+                 if c["llava_forward_reads_pooler_output"]
+                 else "a plain list (transformers 4.x)")
+        out["advice"] = (
+            f"get_image_features must return {shape}; the CausalMM wrapper "
+            f"detects this the same way. BeamSearchScorer "
+            f"{'is' if c['BeamSearchScorer'] else 'is NOT'} importable -- "
+            f"OPERA uses its own either way, and the equivalence test against "
+            f"the library's is skipped when it is absent."
+        )
+    return out
+
+
 def check_torch() -> dict:
     try:
         import torch
@@ -628,6 +716,7 @@ def main() -> int:
     checks = [check_python(), check_torch()]
     cuda = checks[-1].get("cuda_available")
     checks.append(check_preinstalled_stack())
+    checks.append(check_contracts())
     checks.append(check_disk(args.model_id))
     if cuda:
         checks += [check_gpus(args.model_id), check_dtypes(),

@@ -201,7 +201,7 @@ def intervene(
     ratio: float = 0.35,
     logit_dtype: str = "native",
     attention_mask: Optional[torch.Tensor] = None,
-    rows: Optional[torch.Tensor] = None,
+    rows: Optional[Any] = None,
     use_m_sys: bool = True,
     noise_halfwidth: Optional[float] = None,
     grid_step: Optional[float] = None,
@@ -224,7 +224,10 @@ def intervene(
             ``{0.0625, 0.5, 8, 32}`` in fp16.
         logit_dtype: storage dtype for the round trip. ``"native"`` keeps the
             incoming dtype and is bit-equivalent to the released code.
-        rows: batch rows to intervene on. ``None`` means all. Pass
+        rows: batch rows to intervene on, as a tensor or a sequence of ints.
+            A sequence is preferred: with ``device_map="auto"`` the model is
+            sharded and an index tensor can only live on one device, while
+            the layer it indexes may be on another. ``None`` means all. Pass
             ``tensor([1])`` to run observational and interventional branches as
             rows 0 and 1 of a single forward pass.
         noise_halfwidth: for ``noise_control``; defaults to half the ULP at
@@ -262,7 +265,8 @@ def intervene(
     B, H, Q, K = attn_logits.shape
     row_sel = (
         torch.arange(B, device=attn_logits.device) if rows is None
-        else rows.to(attn_logits.device)
+        else (rows.to(attn_logits.device) if torch.is_tensor(rows)
+              else torch.as_tensor(list(rows), device=attn_logits.device))
     )
 
     store_dtype = resolve_logit_dtype(logit_dtype, attn_logits)

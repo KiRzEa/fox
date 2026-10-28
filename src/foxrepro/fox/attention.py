@@ -125,7 +125,11 @@ class FoxState:
     img_end: int = -1
 
     # ---- which batch rows get the intervention ----
-    branch_rows: Optional[torch.Tensor] = None
+    #: Plain ints, for the same sharding reason as ``sid_rows``. Fox's
+    #: window happens to sit entirely on the first shard today, so a device
+    #: tensor has never failed here -- which is exactly why it should not be
+    #: one.
+    branch_rows: Optional[Tuple[int, ...]] = None
 
     # ---- SID / CT2S: vision-key masking on the negative branch ----
     # A different intervention on a different tensor: Fox edits pre-softmax
@@ -135,9 +139,17 @@ class FoxState:
     sid_enabled: bool = False
     sid_agg_layer: int = 2
     sid_rank: int = 100
-    #: Rows the mask applies to. None would mean "all rows", which for the
-    #: batched dual pass would prune the clean branch too.
-    sid_rows: Optional[torch.Tensor] = None
+    #: Rows the mask applies to, as plain ints. None would mean "all rows",
+    #: which for the batched dual pass would prune the clean branch too.
+    #:
+    #: NOT a tensor, and that is the point. With device_map="auto" the model
+    #: is sharded, so layer 2's mask is on cuda:0 and layer 16's on cuda:1,
+    #: while an index tensor can only live on one of them -- "indices should
+    #: be either on cpu or on the same device as the indexed tensor". A tuple
+    #: of ints indexes correctly on every shard. Fox never hit this because
+    #: its window is layers 2-15, which all land on the first shard; SID
+    #: masks from layer 2 to the last and hits it on the first forward.
+    sid_rows: Optional[Tuple[int, ...]] = None
     #: Which vision tokens CT2S keeps. ``"lowest"`` is SID; the others are
     #: validation arms. ``"highest"`` is the line commented out one above it
     #: in the released source -- that is FastV, and it is the alternative the
@@ -181,7 +193,7 @@ class FoxState:
         rows are identical anyway -- nothing has happened to either yet -- so
         this only matters if the rows ever stop sharing a prompt.
         """
-        if self.sid_rows is None or self.sid_rows.numel() == 0:
+        if not self.sid_rows:
             return 0
         return int(self.sid_rows[0])
 
@@ -418,6 +430,15 @@ def causalmm_vision(
                 raise ValueError(
                     f"counterfactual row {r} but the batch has {n} rows")
             out[r] = cf
+        if _forward_reads_pooler_output(inner):
+            # transformers >= 5.x: `forward` does
+            #     self.get_image_features(..., return_dict=True).pooler_output
+            # so the per-image list is carried on the vision outputs object
+            # rather than being the return value. On 4.57.x the list IS the
+            # return value and `forward` cats it directly. The payload is the
+            # same list either way; only the wrapper differs.
+            outs.pooler_output = out
+            return outs
         return out
 
     # Patch the INSTANCE, and on the way out remove the instance attribute
@@ -433,6 +454,41 @@ def causalmm_vision(
             inner.get_image_features = orig
         else:
             del inner.get_image_features
+
+
+def _forward_reads_pooler_output(inner: Any) -> bool:
+    """Does this transformers version's ``forward`` unwrap ``.pooler_output``?
+
+    ``LlavaModel.get_image_features`` changed contract between the version
+    this was written against and the one that runs on Kaggle:
+
+    * 4.57.x returns the per-image list, and ``forward`` does
+      ``torch.cat(image_features, dim=0)``;
+    * 5.16.x returns the vision outputs object with the list assigned to
+      ``.pooler_output``, and ``forward`` does
+      ``self.get_image_features(..., return_dict=True).pooler_output``.
+
+    A wrapper that returns the wrong shape fails with
+    ``'list' object has no attribute 'pooler_output'`` -- inside
+    transformers, pointing nowhere near this file.
+
+    The caller's own source is the only honest discriminator: a version
+    number would have to be mapped by hand and would be wrong the first time
+    the contract moves again, and both versions' ``get_image_features``
+    return something with a ``pooler_output`` attribute, so duck-typing the
+    return value cannot tell them apart.
+    """
+    import inspect
+
+    try:
+        src = inspect.getsource(type(inner).forward)
+    except (OSError, TypeError) as exc:  # pragma: no cover - packaged source
+        raise RuntimeError(
+            "cannot read LlavaModel.forward's source, so the shape "
+            "get_image_features must return is unknown. CausalMM's wrapper "
+            "has to match it exactly; see _forward_reads_pooler_output."
+        ) from exc
+    return ".pooler_output" in src
 
 
 @contextlib.contextmanager
@@ -559,7 +615,9 @@ def fox_attention_forward(
             if rows is None:
                 m = m.masked_fill(drop.view(1, 1, 1, -1), fill)
             else:
-                m[rows] = m[rows].masked_fill(drop.view(1, 1, 1, -1), fill)
+                # list(rows), not a tensor: see FoxState.sid_rows.
+                idx = list(rows)
+                m[idx] = m[idx].masked_fill(drop.view(1, 1, 1, -1), fill)
             attention_mask = m
         # The layer itself is never altered: fall through to the untouched
         # path below with (possibly) a narrower mask.
@@ -1127,13 +1185,12 @@ def fox_generate(
         enabled=not single_branch, mode=mode, gamma=gamma, ratio=ratio,
         logit_dtype=logit_dtype, softmax_dtype=softmax_dtype,
         img_start=img_start, img_end=img_end,
-        branch_rows=torch.tensor([1], device=device),
+        branch_rows=(1,),
         eager_layers=eager_layers if eager_layers is not None else FOX.eager_layers,
         generator=gen,
         sid_enabled=sid, sid_agg_layer=sid_agg_layer, sid_rank=sid_rank,
         sid_select=sid_select, sid_generator=gen,
-        sid_rows=(torch.tensor([perturbed_row], device=device)
-                  if sid else None),
+        sid_rows=(perturbed_row,) if sid else None,
         sid_keep=None,
     ), cf_ctx:
         for step in range(max_new_tokens):

@@ -778,3 +778,67 @@ class TestUntrackedOverridesAreRefused(_Base):
                 msg = str(cm.exception)
                 self.assertIn("VARIANT_FIELDS", msg)
                 self.assertIn(key, msg)
+
+
+class TestPerSampleSeedIsStable(unittest.TestCase):
+    """The same sample must get the same seed in every process.
+
+    ``hash()`` on a str is salted per interpreter unless PYTHONHASHSEED is
+    set, and the per-sample seed used it. Three consequences, all silent:
+    an identical command did not reproduce its own tokens; a job resumed
+    after the session wall continued on a different stream; and two arms at
+    "the same seed" never saw the same draw.
+
+    Found by the alpha=0 validation arm, which scored 76.4-78.2 against the
+    baseline's 77.0 -- the same distribution -- while 14-19% of individual
+    answers differed.
+    """
+
+    IDS = ("pope/adversarial/q0000001", "pope/adversarial/q0000002",
+           "chair/val2014_500/391895")
+
+    def test_it_does_not_depend_on_the_interpreter(self) -> None:
+        import subprocess
+        import sys
+
+        from foxrepro.bench.methods import sample_seed
+
+        want = [sample_seed(42, s) for s in self.IDS]
+        prog = (
+            "import sys; sys.path.insert(0, 'src');"
+            "from foxrepro.bench.methods import sample_seed;"
+            f"print([sample_seed(42, s) for s in {self.IDS!r}])"
+        )
+        # A fresh interpreter picks a fresh hash salt, which is exactly the
+        # condition that broke this.
+        for _ in range(3):
+            out = subprocess.run(
+                [sys.executable, "-c", prog], capture_output=True, text=True,
+                cwd=str(Path(__file__).resolve().parents[1]),
+            )
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(eval(out.stdout.strip()), want)
+
+    def test_different_samples_get_different_seeds(self) -> None:
+        from foxrepro.bench.methods import sample_seed
+
+        seeds = [sample_seed(42, s) for s in self.IDS]
+        self.assertEqual(len(set(seeds)), len(seeds))
+
+    def test_different_run_seeds_separate_the_streams(self) -> None:
+        from foxrepro.bench.methods import sample_seed
+
+        a = [sample_seed(42, s) for s in self.IDS]
+        b = [sample_seed(43, s) for s in self.IDS]
+        self.assertEqual(len(set(a) & set(b)), 0)
+
+    def test_no_seed_means_no_seed(self) -> None:
+        from foxrepro.bench.methods import sample_seed
+
+        self.assertIsNone(sample_seed(None, "anything"))
+
+    def test_nothing_still_calls_the_salted_hash(self) -> None:
+        """The three call sites are easy to add a fourth to."""
+        src = (Path(__file__).resolve().parents[1]
+               / "src" / "foxrepro" / "bench" / "methods.py").read_text()
+        self.assertNotIn("hash(sample.sample_id)", src)

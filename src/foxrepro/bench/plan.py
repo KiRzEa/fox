@@ -90,7 +90,7 @@ __all__ = [
     "Job", "PLAN", "measured_cost", "scan_progress", "next_jobs", "render_plan",
     "partition_jobs", "partition_by_priority", "pair_key",
     "ingest_runs", "archive_runs", "DUAL_BRANCH", "SPLIT_BRANCH",
-    "BEAM_SEARCH",
+    "BEAM_SEARCH", "method_from_filename",
 ]
 
 #: Seconds per sample on 2x T4 with LLaVA-1.5-7B fp16 sharded. Measured, not
@@ -576,15 +576,24 @@ def _build_plan() -> List[Job]:
                         note="the negative branch alone; must be worse than baseline"))
 
     # V2. The formula. At alpha = 0, (1 + a) z_obs - a z_cd collapses to
-    #     z_obs, so the output must be TOKEN-IDENTICAL to the sampling
-    #     baseline at the same seed -- not close, identical. A sign error, a
-    #     mis-scoped branch or a leaked perturbation all break exactness
-    #     while leaving the accuracy plausible. 500 samples is plenty: one
-    #     differing token fails it.
+    #     z_obs, so the output must be TOKEN-IDENTICAL to the baseline. A
+    #     sign error, a mis-scoped branch or a leaked perturbation all break
+    #     exactness while leaving the accuracy plausible.
+    #
+    #     GREEDY, and that is a correction. Run under sampling it can never
+    #     be identical, for two reasons the first attempt found the hard way:
+    #     the sampling path decides on the BETA-MASKED logits, which the
+    #     baseline does not apply, and the draw is stochastic. Under greedy
+    #     with mask_greedy False the decision is `fused`, which at alpha = 0
+    #     IS z_obs, and nothing is random -- so identity is both predicted
+    #     and achievable. The sampling version was not wasted: it showed the
+    #     distributions agree (76.4-78.2 against the baseline's 77.0) while
+    #     14-19% of individual answers differed, which is what exposed the
+    #     per-process seed defect that sample_seed now fixes.
     for method in ("vcd", "icd", "sid", "causalmm"):
         jobs.append(Job("validation", method, "pope", "adversarial",
-                        alpha=0.0, limit=500,
-                        note="alpha=0 must reproduce the baseline token for token"))
+                        alpha=0.0, limit=500, decoding="greedy",
+                        note="alpha=0 must reproduce the greedy baseline token for token"))
 
     # V3. SID's direction and selection. The released source has
     #     `topk(ATTENTION_RANK)` commented out one line above the call it
@@ -983,6 +992,48 @@ MERGE_COMPATIBLE_FIELDS = (
 )
 
 
+def method_from_filename(name: str) -> Optional[str]:
+    """The method a run file's NAME claims, or None if it is not one of ours.
+
+    ``m-<method>__b-<benchmark>__...``; see ``storage.RunKey.filename``.
+    """
+    if not name.startswith("m-"):
+        return None
+    head, sep, _ = name[2:].partition("__b-")
+    return head if sep else None
+
+
+def _mislabelled(src: Path, records) -> Optional[str]:
+    """Why this file must not be ingested, or None if it may be.
+
+    A run file's name encodes its method, and resume is keyed on the name.
+    So a file whose records say a DIFFERENT method is not merely untidy: the
+    next run of the method the name claims will find it, consider itself
+    finished, and report that method's row carrying another method's numbers.
+
+    This is not hypothetical. `vcd` meant the Fox-fusion hybrid in rounds 1-5
+    and now means VCD; the archive was relabelled, but session zips taken
+    before that still carry six files named `m-vcd__*` whose records say
+    `vcd_fox_fusion`. Re-ingesting one put the hybrid back under VCD's name
+    and silently cost three VCD jobs in round 6 -- they ran, found 3000
+    records, and wrote nothing. Rejecting on arrival is the only place that
+    catches it, because by the time anything else looks the file is
+    indistinguishable from a finished run.
+    """
+    if not records:
+        return "it has no records (a run that died before writing one)"
+    claimed = method_from_filename(src.name)
+    if claimed is None:
+        return None
+    recorded = {str(r.get("method")) for r in records if r.get("method")}
+    if recorded and claimed not in recorded:
+        return (f"its name says method={claimed!r} but its records say "
+                f"{sorted(recorded)} -- resume is keyed on the name, so this "
+                f"would make the next {claimed!r} run report another "
+                f"method's numbers")
+    return None
+
+
 def _compatible_records(existing, incoming):
     """Split ``incoming`` into records that may join ``existing``, and those
     that may not.
@@ -1096,6 +1147,12 @@ def ingest_runs(
         # rglob: a zip may have nested members even though pack_runs.sh is flat.
         for src in sorted(Path(src_dir).rglob("*.jsonl")):
             target = dest / src.name
+            why = _mislabelled(src, _records(src))
+            if why is not None:
+                report["rejected"] = int(report.get("rejected", 0)) + 1
+                report["files"].append(  # type: ignore[union-attr]
+                    f"REFUSED {src.name}: {why}")
+                continue
             if not target.exists():
                 if not dry_run:
                     target.write_bytes(src.read_bytes())

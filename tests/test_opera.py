@@ -299,6 +299,84 @@ class TestSpeculativeForwardsLeaveNoTrace(_ModelBase):
         self.assertEqual(got["n_forwards_per_step"], 4)
 
 
+class TestTheOneRowPrefillFanOut(_ModelBase):
+    """Prefilling one row and fanning the cache must equal prefilling five.
+
+    Not an optimisation: a five-row 625-token prefill OOMs on a T4, because
+    ``device_map="auto"`` packs the first GPU to ~14.0 of its 14.56 GiB with
+    weights and five rows of activations do not fit in the remainder. The
+    arm did not run at all until this.
+
+    It is legitimate because at step 0 every beam holds the same prompt. What
+    it is NOT is bit-exact in every dtype: batching changes which matmul
+    kernel runs. Measured on this fixture -- 0.0 in fp16, one fp32 ULP
+    (4.5e-8) in fp32, with the top-5 candidate set unchanged in both. The
+    tests below pin the property that matters (the same tokens come out)
+    rather than an exactness that is not true.
+    """
+
+    def five_row_prefill(self):
+        inp = self.inputs
+        n = 5
+        with torch.no_grad():
+            return self.model(
+                input_ids=inp["input_ids"].repeat(n, 1),
+                attention_mask=inp["attention_mask"].repeat(n, 1),
+                pixel_values=inp["pixel_values"].repeat(n, 1, 1, 1),
+                use_cache=True,
+            )
+
+    def one_row_fanned(self):
+        inp = self.inputs
+        with torch.no_grad():
+            out = self.model(
+                input_ids=inp["input_ids"],
+                attention_mask=inp["attention_mask"],
+                pixel_values=inp["pixel_values"], use_cache=True,
+            )
+        out.past_key_values.reorder_cache(torch.zeros(5, dtype=torch.long))
+        return out
+
+    def test_the_fanned_cache_has_the_beam_shape(self) -> None:
+        fanned = self.one_row_fanned().past_key_values
+        batched = self.five_row_prefill().past_key_values
+        a = fanned.layers[0].keys
+        b = batched.layers[0].keys
+        self.assertEqual(a.shape, b.shape)
+        self.assertEqual(a.shape[0], 5)
+
+    def test_every_fanned_row_is_a_copy_of_the_one_prefilled(self) -> None:
+        """index_select with an all-zeros index, so exactly five copies."""
+        fanned = self.one_row_fanned().past_key_values
+        k = fanned.layers[0].keys
+        for i in range(1, 5):
+            with self.subTest(row=i):
+                self.assertTrue(torch.equal(k[0], k[i]))
+
+    def test_the_candidate_set_is_unchanged(self) -> None:
+        """What the beam search actually consumes: the top-5 by raw logit."""
+        a = self.one_row_fanned().logits[0, -1].float()
+        b = self.five_row_prefill().logits[0, -1].float()
+        self.assertEqual(a.topk(5).indices.tolist(),
+                         b.topk(5).indices.tolist())
+
+    def test_the_batched_rows_are_not_guaranteed_identical_either(self) -> None:
+        """The reference it would be compared against is not itself exact.
+
+        Five identical inputs in one batch do not have to produce five
+        identical logit rows -- that is the same kernel-selection effect, and
+        it means "the batched prefill" is not a bit-exact ground truth to
+        hold the fan-out against.
+        """
+        rows = self.five_row_prefill().logits[:, -1].float()
+        spread = (rows.max(dim=0).values - rows.min(dim=0).values).abs().max()
+        self.assertLess(float(spread), 1e-5)
+        for i in range(5):
+            with self.subTest(row=i):
+                self.assertEqual(rows[i].topk(5).indices.tolist(),
+                                 rows[0].topk(5).indices.tolist())
+
+
 class TestOperaGuards(_ModelBase):
     def test_one_beam_is_refused(self) -> None:
         with self.assertRaises(ValueError) as cm:

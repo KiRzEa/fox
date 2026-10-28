@@ -358,7 +358,6 @@ def opera_generate(
 
     ids = input_ids.repeat(num_beams, 1)
     mask = attn_mask.repeat(num_beams, 1)
-    px = pixel_values.repeat(num_beams, *([1] * (pixel_values.dim() - 1)))
 
     scorer = BeamScorer(
         num_beams, length_penalty=length_penalty,
@@ -386,17 +385,32 @@ def opera_generate(
     ):
         for step in range(max_new_tokens):
             if step == 0:
-                out = model(input_ids=ids, attention_mask=mask,
-                            pixel_values=px, use_cache=True)
+                # ONE row, then fan the cache out to num_beams. At step 0
+                # every beam holds the same prompt, so this is numerically
+                # identical -- and it is not an optimisation, it is what
+                # makes the arm run at all. A 5-row 625-token prefill OOMs
+                # on a T4: device_map="auto" packs the first GPU to ~14.0 of
+                # its 14.56 GiB with weights, and five rows of activations
+                # do not fit in what is left. One row also costs a fifth of
+                # the prefill compute, which on POPE is most of the job.
+                out = model(input_ids=input_ids, attention_mask=attn_mask,
+                            pixel_values=pixel_values, use_cache=True)
+                cache = out.past_key_values
+                # index_select on the batch dim with an all-zeros index:
+                # five copies of the one prefilled row. reorder_cache moves
+                # the index to each layer's own device, so this is correct
+                # on a sharded model.
+                cache.reorder_cache(
+                    torch.zeros(num_beams, dtype=torch.long))
+                z = out.logits[:, -1, :].repeat(num_beams, 1)
             else:
                 out = model(input_ids=ids[:, -1:], attention_mask=mask,
                             past_key_values=cache, use_cache=True)
-            cache = out.past_key_values
+                cache = out.past_key_values
+                # RAW logits, in the model dtype: the penalty is added here,
+                # not after log_softmax, and the dtype is the released one.
+                z = out.logits[:, -1, :]
             cache_len = int(cache.get_seq_length())
-
-            # RAW logits, in the model dtype: the penalty is added here, not
-            # after log_softmax, and the dtype is the released one.
-            z = out.logits[:, -1, :]
             cand_scores, cand_tokens = torch.topk(
                 z, num_attn_candidates, dim=-1, largest=True, sorted=True)
 

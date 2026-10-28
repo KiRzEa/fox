@@ -58,8 +58,32 @@ None of the four papers reports this number.
 
 ## V2 — Is the formula right?
 
-`--alpha 0`, on `vcd`, `icd`, `sid`, `causalmm`. POPE-adversarial,
-`--limit 500`, seed 42. **0.6 h.**
+`--alpha 0 --decoding greedy`, on `vcd`, `icd`, `sid`, `causalmm`.
+POPE-adversarial, `--limit 500`, seed 42. **0.6 h.**
+
+> **Corrected after the first run.** This arm was first specified under
+> *sampling*, where identity is not achievable however correct the code is:
+> the contrastive path decides on the **beta-masked** logits, which the
+> baseline never applies, and the draw is stochastic. Under greedy with
+> `mask_greedy` False the decision is `fused`, which at `alpha = 0` is
+> `z_obs` exactly, and nothing is random.
+>
+> The sampling version was not wasted. It scored 76.40 / 77.00 / 77.20 /
+> 78.20 against the baseline's 77.00 — the same distribution — while 14–19 %
+> of individual answers differed. Same distribution, different draws, which
+> is what exposed the defect below.
+
+> **Defect found by this arm.** The per-sample seed was
+> `cfg.seed * K + hash(sample_id) % K`, and `hash()` on a `str` is salted
+> per interpreter unless `PYTHONHASHSEED` is set. So the same sample got a
+> different seed in every process: an identical command did not reproduce
+> its own tokens, a job resumed after the session wall continued on a
+> different stream, and two arms at "the same seed" never saw the same draw.
+> Now `methods.sample_seed`, on `zlib.crc32`. It changes the randomness of
+> every FUTURE run; records already written are what they are, and the
+> seed-level analysis never required the arms to share a draw, so nothing
+> already concluded depends on it. The greedy determinism probe could not
+> have caught this — greedy has no draw to vary.
 
 At `cd_alpha = 0` the shared rule
 
@@ -80,8 +104,7 @@ samples suffice because one differing token fails it.
 | outcome | reading |
 |---|---|
 | identical | the rule is wired correctly, including which side the coefficient is on |
-| differs on a few tokens | something consumes randomness differently between the arms — look at the seeded generators before trusting any paired comparison |
-| differs widely | the coefficient is on the wrong term, or the perturbation is reaching row 0 |
+| differs at all | under greedy there is no randomness left to blame: the coefficient is on the wrong term, the perturbation is reaching row 0, or the decision is not taking `fused` |
 
 ---
 
@@ -176,6 +199,44 @@ Every OPERA run records `penalty_spread_mean`, `logit_spread_mean` and
 from a single plain run before the controls are even compared.
 
 ---
+
+## Results, round 6 session 1 (2026-10-28)
+
+The first pass. 14 arms planned, 12 produced records: both OPERA controls
+OOM'd on a T4 (a five-row prefill does not fit beside the weights; fixed by
+prefilling one row and fanning the cache).
+
+**V1 holds for all four, and the magnitudes are themselves a finding.**
+Baseline 77.17.
+
+| arm | accuracy | vs baseline |
+|---|---|---|
+| `vcd` negative branch | 76.10 | −1.07 |
+| `icd` negative branch | 73.70 | −3.47 |
+| `sid` negative branch | 56.43 | **−20.73** |
+| `causalmm` negative branch | 51.97 | **−25.20** |
+
+Every negative branch is worse, so the premise all four share survives. But
+they are not worse by remotely comparable amounts: VCD's noised image barely
+degrades the model, while SID's CT2S and CausalMM's counterfactual put it
+near chance for a yes/no task (50 %). Those two are not "a worse reader" so
+much as "almost no reader", which is consistent with the 1/577 gain measured
+for CausalMM and worth carrying into how their gains are read.
+
+**V2 ran under the wrong protocol** and is re-specified above.
+
+**V4 is not yet interpretable.** `cf_constant` agrees with `shuffle` on
+96.6 % of samples and `cf_blind` on 95.2 %. Those look high, but the arms
+they must be compared against — two runs of *plain* `causalmm` differing only
+in the draw — were not run, and under the old per-process seed the
+same-method ceiling was around 81–86 %. The arm needs that ceiling before it
+says anything; with `sample_seed` fixed, two plain runs at different seeds
+now give it.
+
+**V6 holds.** `diverged_frac` 0.038 (ICD), 0.046 (SID), 0.039 (CausalMM) on
+POPE: strictly between 0 and 1, so none of the three is inert, and each
+changes about one decision in 25. POPE emits one token, so this is the
+floor; CHAIR should be far higher.
 
 ## V6 — Does each rule change any decision? (no extra run)
 

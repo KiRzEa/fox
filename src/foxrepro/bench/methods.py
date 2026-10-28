@@ -37,6 +37,8 @@ against it.
 
 from __future__ import annotations
 
+import zlib
+
 from typing import Any, ClassVar, Dict, Optional
 
 from foxrepro.bench.generate import (
@@ -216,6 +218,34 @@ def _refuse_untracked_override(name: str, value: Any, default: Any) -> Any:
     )
 
 
+def sample_seed(seed: Optional[int], sample_id: str) -> Optional[int]:
+    """A per-sample seed that is the same in every process.
+
+    ``hash()`` on a str is salted per interpreter unless ``PYTHONHASHSEED``
+    is set, so ``cfg.seed * K + hash(sample_id) % K`` -- which this used --
+    gave a DIFFERENT seed for the same sample in every run. Three
+    consequences, all silent:
+
+    * re-running an identical command did not reproduce its own tokens;
+    * a job cut by the session wall and resumed continued on a different
+      randomness stream, so a resumed run is not the run it would have been;
+    * two arms at "the same seed" never saw the same draw, so nothing was
+      paired in the generation component.
+
+    Found by the alpha=0 validation arm: it scored 76.4-78.2 against the
+    baseline's 77.0 -- the same distribution -- while 14-19% of individual
+    answers differed. That is two independent draws, not a wiring fault.
+
+    ``crc32`` is stable across processes, platforms and Python versions.
+    Note this changes the randomness of every FUTURE run; records already
+    written are what they are, and the seed-level analysis never required
+    the arms to share a draw, so nothing already concluded depends on it.
+    """
+    if seed is None:
+        return None
+    return seed * 1_000_003 + zlib.crc32(sample_id.encode("utf-8")) % 1_000_003
+
+
 def parse_layer_window(spec: Optional[str]) -> frozenset:
     """``"2-15"`` or ``"2,3,4"`` -> a frozenset of layer indices.
 
@@ -341,7 +371,7 @@ class _LlavaMethod(Method):
         cfg = self.cfg
         # Seed per sample so a resumed run reproduces the same tokens for any
         # sample it redoes, and so two methods see the same randomness.
-        seed = None if cfg.seed is None else (cfg.seed * 1_000_003 + hash(sample.sample_id) % 1_000_003)
+        seed = sample_seed(cfg.seed, sample.sample_id)
 
         result = self._attn.fox_generate(
             self.model,
@@ -479,9 +509,7 @@ class VcdFoxFusionMethod(_LlavaMethod):
         inputs = dict(self._prepare(sample, prompt))
         inputs["pixel_values_do"] = self._noised(inputs["pixel_values"])
         cfg = self.cfg
-        seed = None if cfg.seed is None else (
-            cfg.seed * 1_000_003 + hash(sample.sample_id) % 1_000_003
-        )
+        seed = sample_seed(cfg.seed, sample.sample_id)
         px_do = inputs.pop("pixel_values_do")
         result = self._attn.fox_generate(
             self.model, inputs,
@@ -615,9 +643,7 @@ class _ContrastiveMethod(_LlavaMethod):
         import torch
 
         cfg = self.cfg
-        seed = None if cfg.seed is None else (
-            cfg.seed * 1_000_003 + hash(sample.sample_id) % 1_000_003
-        )
+        seed = sample_seed(cfg.seed, sample.sample_id)
         # Move the inputs to the model's device BEFORE building the negative
         # branch. The processor returns CPU tensors and `fox_generate` moves
         # them later, but `_negative` runs first and perturbs them -- and a

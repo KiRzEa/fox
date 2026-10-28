@@ -110,16 +110,23 @@ def v1_negative_branch_is_worse(runs: Path) -> List[str]:
 
 
 def v2_alpha_zero_collapses(runs: Path) -> List[str]:
-    """At alpha = 0 the rule is the identity, so the tokens must match."""
-    print("\nV2  Does alpha = 0 reproduce the baseline exactly?")
-    base = find(runs, "sampling")
+    """At alpha = 0 the rule is the identity, so the tokens must match.
+
+    GREEDY only. Under sampling the contrastive path decides on the
+    beta-masked logits -- which the baseline never applies -- and the draw
+    is stochastic, so identity is not achievable however correct the code
+    is. Under greedy with mask_greedy False the decision is `fused`, which
+    at alpha = 0 is z_obs exactly.
+    """
+    print("\nV2  Does alpha = 0 reproduce the greedy baseline exactly?")
+    base = find(runs, "sampling", decoding="greedy")
     if base is None:
-        say(SKIP, "no sampling baseline at seed 42; cannot compare")
+        say(SKIP, "no greedy baseline at seed 42; cannot compare")
         return []
     base_out = outputs_by_sample(load(base)[0])
     verdicts = []
     for method in ("vcd", "icd", "sid", "causalmm"):
-        path = find(runs, method, alpha=0.0)
+        path = find(runs, method, alpha=0.0, decoding="greedy")
         if path is None:
             say(SKIP, f"{method}: alpha=0 arm not run yet")
             continue

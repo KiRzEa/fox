@@ -65,23 +65,103 @@
       "n_samples": 3000,
       "measured": false
     },
-    "table1_methods:vcd:pope:adversarial": {
-      "id": "table1_methods:vcd:pope:adversarial",
-      "target": "table1_methods",
+    "table2_methods:vcd:chair:val2014_500": {
+      "id": "table2_methods:vcd:chair:val2014_500",
+      "target": "table2_methods",
       "note": "compared baseline, own decoding rule",
-      "command": "python -m foxrepro.bench.generate --method vcd --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 3300.0,
-      "run_file": "m-vcd__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "command": "python -m foxrepro.bench.generate --method vcd --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 5450.0,
+      "run_file": "m-vcd__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2_methods:icd:chair:val2014_500": {
+      "id": "table2_methods:icd:chair:val2014_500",
+      "target": "table2_methods",
+      "note": "compared baseline, own decoding rule",
+      "command": "python -m foxrepro.bench.generate --method icd --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 8200.0,
+      "run_file": "m-icd__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2_methods:sid:chair:val2014_500": {
+      "id": "table2_methods:sid:chair:val2014_500",
+      "target": "table2_methods",
+      "note": "compared baseline, own decoding rule",
+      "command": "python -m foxrepro.bench.generate --method sid --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 5450.0,
+      "run_file": "m-sid__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2_methods:causalmm:chair:val2014_500": {
+      "id": "table2_methods:causalmm:chair:val2014_500",
+      "target": "table2_methods",
+      "note": "compared baseline, own decoding rule",
+      "command": "python -m foxrepro.bench.generate --method causalmm --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 5450.0,
+      "run_file": "m-causalmm__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2_methods:vcd:chair:val2014_500:s43": {
+      "id": "table2_methods:vcd:chair:val2014_500:s43",
+      "target": "table2_methods",
+      "note": "compared baseline, own decoding rule",
+      "command": "python -m foxrepro.bench.generate --method vcd --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 5450.0,
+      "run_file": "m-vcd__b-chair__s-val2014_500__seed-43__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2_methods:icd:chair:val2014_500:s43": {
+      "id": "table2_methods:icd:chair:val2014_500:s43",
+      "target": "table2_methods",
+      "note": "compared baseline, own decoding rule",
+      "command": "python -m foxrepro.bench.generate --method icd --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 8200.0,
+      "run_file": "m-icd__b-chair__s-val2014_500__seed-43__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2_methods:sid:chair:val2014_500:s43": {
+      "id": "table2_methods:sid:chair:val2014_500:s43",
+      "target": "table2_methods",
+      "note": "compared baseline, own decoding rule",
+      "command": "python -m foxrepro.bench.generate --method sid --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 5450.0,
+      "run_file": "m-sid__b-chair__s-val2014_500__seed-43__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table2_methods:causalmm:chair:val2014_500:s43": {
+      "id": "table2_methods:causalmm:chair:val2014_500:s43",
+      "target": "table2_methods",
+      "note": "compared baseline, own decoding rule",
+      "command": "python -m foxrepro.bench.generate --method causalmm --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
+      "est_s": 5450.0,
+      "run_file": "m-causalmm__b-chair__s-val2014_500__seed-43__dt-fp16__v-sampling-5c7c06df.jsonl",
+      "n_samples": 500,
+      "measured": false
+    },
+    "table1_methods:opera:pope:random:greedy": {
+      "id": "table1_methods:opera:pope:random:greedy",
+      "target": "table1_methods",
+      "note": "beam-5 + over-trust penalty, Fox's 1-token harness",
+      "command": "python -m foxrepro.bench.generate --method opera --benchmark pope --split random --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 4020.0,
+      "run_file": "m-opera__b-pope__s-random__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
       "n_samples": 3000,
       "measured": false
     },
-    "table1_methods:vcd:pope:adversarial:s43": {
-      "id": "table1_methods:vcd:pope:adversarial:s43",
+    "table1_methods:opera:pope:popular:greedy": {
+      "id": "table1_methods:opera:pope:popular:greedy",
       "target": "table1_methods",
-      "note": "compared baseline, own decoding rule",
-      "command": "python -m foxrepro.bench.generate --method vcd --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 3300.0,
-      "run_file": "m-vcd__b-pope__s-adversarial__seed-43__dt-fp16__v-sampling-2d07edcb.jsonl",
+      "note": "beam-5 + over-trust penalty, Fox's 1-token harness",
+      "command": "python -m foxrepro.bench.generate --method opera --benchmark pope --split popular --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 4020.0,
+      "run_file": "m-opera__b-pope__s-popular__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
       "n_samples": 3000,
       "measured": false
     },
@@ -125,126 +205,6 @@
       "n_samples": 3000,
       "measured": false
     },
-    "table1_methods:opera:pope:random:greedy": {
-      "id": "table1_methods:opera:pope:random:greedy",
-      "target": "table1_methods",
-      "note": "beam-5 + over-trust penalty, Fox's 1-token harness",
-      "command": "python -m foxrepro.bench.generate --method opera --benchmark pope --split random --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 4020.0,
-      "run_file": "m-opera__b-pope__s-random__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "table2_methods:vcd:chair:val2014_500": {
-      "id": "table2_methods:vcd:chair:val2014_500",
-      "target": "table2_methods",
-      "note": "compared baseline, own decoding rule",
-      "command": "python -m foxrepro.bench.generate --method vcd --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
-      "est_s": 5450.0,
-      "run_file": "m-vcd__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-5c7c06df.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "table2_methods:icd:chair:val2014_500": {
-      "id": "table2_methods:icd:chair:val2014_500",
-      "target": "table2_methods",
-      "note": "compared baseline, own decoding rule",
-      "command": "python -m foxrepro.bench.generate --method icd --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
-      "est_s": 8200.0,
-      "run_file": "m-icd__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-5c7c06df.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "table2_methods:sid:chair:val2014_500": {
-      "id": "table2_methods:sid:chair:val2014_500",
-      "target": "table2_methods",
-      "note": "compared baseline, own decoding rule",
-      "command": "python -m foxrepro.bench.generate --method sid --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
-      "est_s": 5450.0,
-      "run_file": "m-sid__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-5c7c06df.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "table2_methods:causalmm:chair:val2014_500": {
-      "id": "table2_methods:causalmm:chair:val2014_500",
-      "target": "table2_methods",
-      "note": "compared baseline, own decoding rule",
-      "command": "python -m foxrepro.bench.generate --method causalmm --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
-      "est_s": 5450.0,
-      "run_file": "m-causalmm__b-chair__s-val2014_500__seed-42__dt-fp16__v-sampling-5c7c06df.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "table1_methods:opera:pope:popular:greedy": {
-      "id": "table1_methods:opera:pope:popular:greedy",
-      "target": "table1_methods",
-      "note": "beam-5 + over-trust penalty, Fox's 1-token harness",
-      "command": "python -m foxrepro.bench.generate --method opera --benchmark pope --split popular --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 4020.0,
-      "run_file": "m-opera__b-pope__s-popular__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "table1_methods:opera:pope:adversarial:greedy": {
-      "id": "table1_methods:opera:pope:adversarial:greedy",
-      "target": "table1_methods",
-      "note": "beam-5 + over-trust penalty, Fox's 1-token harness",
-      "command": "python -m foxrepro.bench.generate --method opera --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
-      "est_s": 4020.0,
-      "run_file": "m-opera__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
-    "table2_methods:vcd:chair:val2014_500:s43": {
-      "id": "table2_methods:vcd:chair:val2014_500:s43",
-      "target": "table2_methods",
-      "note": "compared baseline, own decoding rule",
-      "command": "python -m foxrepro.bench.generate --method vcd --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
-      "est_s": 5450.0,
-      "run_file": "m-vcd__b-chair__s-val2014_500__seed-43__dt-fp16__v-sampling-5c7c06df.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "table2_methods:icd:chair:val2014_500:s43": {
-      "id": "table2_methods:icd:chair:val2014_500:s43",
-      "target": "table2_methods",
-      "note": "compared baseline, own decoding rule",
-      "command": "python -m foxrepro.bench.generate --method icd --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
-      "est_s": 8200.0,
-      "run_file": "m-icd__b-chair__s-val2014_500__seed-43__dt-fp16__v-sampling-5c7c06df.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "table2_methods:sid:chair:val2014_500:s43": {
-      "id": "table2_methods:sid:chair:val2014_500:s43",
-      "target": "table2_methods",
-      "note": "compared baseline, own decoding rule",
-      "command": "python -m foxrepro.bench.generate --method sid --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
-      "est_s": 5450.0,
-      "run_file": "m-sid__b-chair__s-val2014_500__seed-43__dt-fp16__v-sampling-5c7c06df.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "table2_methods:causalmm:chair:val2014_500:s43": {
-      "id": "table2_methods:causalmm:chair:val2014_500:s43",
-      "target": "table2_methods",
-      "note": "compared baseline, own decoding rule",
-      "command": "python -m foxrepro.bench.generate --method causalmm --benchmark chair --split val2014_500 --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 43 --decoding sampling --system-prompt llava_v1 --wrapper released --prompt-template-id chair_v1",
-      "est_s": 5450.0,
-      "run_file": "m-causalmm__b-chair__s-val2014_500__seed-43__dt-fp16__v-sampling-5c7c06df.jsonl",
-      "n_samples": 500,
-      "measured": false
-    },
-    "opera_protocol:opera:pope:adversarial:greedy": {
-      "id": "opera_protocol:opera:pope:adversarial:greedy",
-      "target": "opera_protocol",
-      "note": "OPERA's own 10-token harness; still rollback-free",
-      "command": "python -m foxrepro.bench.generate --method opera --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --max-new-tokens 10",
-      "est_s": 10500.0,
-      "run_file": "m-opera__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-5e8ffbea.jsonl",
-      "n_samples": 3000,
-      "measured": false
-    },
     "table2_methods:vcd:chair:val2014_500:s44": {
       "id": "table2_methods:vcd:chair:val2014_500:s44",
       "target": "table2_methods",
@@ -273,6 +233,16 @@
       "est_s": 5450.0,
       "run_file": "m-causalmm__b-chair__s-val2014_500__seed-44__dt-fp16__v-sampling-5c7c06df.jsonl",
       "n_samples": 500,
+      "measured": false
+    },
+    "table1_methods:opera:pope:adversarial:greedy": {
+      "id": "table1_methods:opera:pope:adversarial:greedy",
+      "target": "table1_methods",
+      "note": "beam-5 + over-trust penalty, Fox's 1-token harness",
+      "command": "python -m foxrepro.bench.generate --method opera --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw",
+      "est_s": 4020.0,
+      "run_file": "m-opera__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-17d4eb8d.jsonl",
+      "n_samples": 3000,
       "measured": false
     },
     "table9_methods:vcd:chair:val2014_500:greedy": {
@@ -304,6 +274,16 @@
       "run_file": "m-sid__b-chair__s-val2014_500__seed-42__dt-fp16__v-greedy-4a534adb.jsonl",
       "n_samples": 500,
       "measured": false
+    },
+    "opera_protocol:opera:pope:adversarial:greedy": {
+      "id": "opera_protocol:opera:pope:adversarial:greedy",
+      "target": "opera_protocol",
+      "note": "OPERA's own 10-token harness; still rollback-free",
+      "command": "python -m foxrepro.bench.generate --method opera --benchmark pope --split adversarial --model-id llava-hf/llava-1.5-7b-hf --dtype fp16 --device-map auto --seed 42 --decoding greedy --system-prompt llava_v1 --wrapper released --prompt-template-id pope_v0_raw --max-new-tokens 10",
+      "est_s": 10500.0,
+      "run_file": "m-opera__b-pope__s-adversarial__seed-42__dt-fp16__v-greedy-5e8ffbea.jsonl",
+      "n_samples": 3000,
+      "measured": false
     }
   },
   "sessions": [
@@ -316,50 +296,48 @@
         "validation:causalmm:pope:adversarial:greedy:a0:n500",
         "validation:opera:pope:adversarial:greedy:opera_unrestricted",
         "validation:opera:pope:adversarial:greedy:opera_no_penalty",
-        "table1_methods:vcd:pope:adversarial",
-        "table1_methods:vcd:pope:adversarial:s43",
-        "table1_methods:vcd:pope:adversarial:s44",
-        "table1_methods:icd:pope:adversarial:s44",
-        "table1_methods:sid:pope:adversarial:s44",
-        "table1_methods:causalmm:pope:adversarial:s44",
-        "table1_methods:opera:pope:random:greedy"
+        "table2_methods:vcd:chair:val2014_500",
+        "table2_methods:icd:chair:val2014_500",
+        "table2_methods:sid:chair:val2014_500",
+        "table2_methods:causalmm:chair:val2014_500"
       ],
-      "est_hours": 9.46
+      "est_hours": 9.66
     },
     {
       "session": 2,
       "jobs": [
-        "table2_methods:vcd:chair:val2014_500",
-        "table2_methods:icd:chair:val2014_500",
-        "table2_methods:sid:chair:val2014_500",
-        "table2_methods:causalmm:chair:val2014_500",
-        "table1_methods:opera:pope:popular:greedy",
-        "table1_methods:opera:pope:adversarial:greedy"
+        "table2_methods:vcd:chair:val2014_500:s43",
+        "table2_methods:icd:chair:val2014_500:s43",
+        "table2_methods:sid:chair:val2014_500:s43",
+        "table2_methods:causalmm:chair:val2014_500:s43",
+        "table1_methods:opera:pope:random:greedy",
+        "table1_methods:opera:pope:popular:greedy"
       ],
       "est_hours": 9.05
     },
     {
       "session": 3,
       "jobs": [
-        "table2_methods:vcd:chair:val2014_500:s43",
-        "table2_methods:icd:chair:val2014_500:s43",
-        "table2_methods:sid:chair:val2014_500:s43",
-        "table2_methods:causalmm:chair:val2014_500:s43",
-        "opera_protocol:opera:pope:adversarial:greedy"
+        "table1_methods:vcd:pope:adversarial:s44",
+        "table1_methods:icd:pope:adversarial:s44",
+        "table1_methods:sid:pope:adversarial:s44",
+        "table1_methods:causalmm:pope:adversarial:s44",
+        "table2_methods:vcd:chair:val2014_500:s44",
+        "table2_methods:sid:chair:val2014_500:s44",
+        "table2_methods:causalmm:chair:val2014_500:s44",
+        "table1_methods:opera:pope:adversarial:greedy"
       ],
-      "est_hours": 9.74
+      "est_hours": 9.32
     },
     {
       "session": 4,
       "jobs": [
-        "table2_methods:vcd:chair:val2014_500:s44",
-        "table2_methods:sid:chair:val2014_500:s44",
-        "table2_methods:causalmm:chair:val2014_500:s44",
         "table9_methods:vcd:chair:val2014_500:greedy",
         "table9_methods:icd:chair:val2014_500:greedy",
-        "table9_methods:sid:chair:val2014_500:greedy"
+        "table9_methods:sid:chair:val2014_500:greedy",
+        "opera_protocol:opera:pope:adversarial:greedy"
       ],
-      "est_hours": 9.85
+      "est_hours": 8.22
     }
   ]
 }

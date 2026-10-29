@@ -1161,10 +1161,35 @@ def ingest_runs(
                 continue
             scan_run_file(target, repair=True)   # repair a partial tail first
             existing = _records(target)
+            all_incoming = _records(src)
             have = {r.get("sample_id") for r in existing}
-            incoming = [
-                r for r in _records(src) if r.get("sample_id") not in have
-            ]
+            incoming = [r for r in all_incoming
+                        if r.get("sample_id") not in have]
+
+            # The blind spot, closed. When every incoming id is already
+            # present, `incoming` is empty and the per-record check below is
+            # handed nothing to object to -- so two DIFFERENT runs at one
+            # name silently resolve to whichever arrived first. That is how
+            # the Fox-fusion hybrid displaced 1.8 GPU-hours of finished VCD
+            # work: same name, same 3000 sample ids, different run.
+            #
+            # Deliberately narrow. A file that overlaps only in PART is the
+            # round-4 case -- a job that ran half on CPU and half on GPU --
+            # where refusing the incompatible records and keeping the rest
+            # is right, and that path is untouched below.
+            if all_incoming and not incoming:
+                _, clash = _compatible_records(existing, all_incoming)
+                if clash:
+                    report["rejected"] = int(report.get("rejected", 0)) + 1
+                    report["files"].append(  # type: ignore[union-attr]
+                        f"REFUSED {src.name}: it covers exactly the samples "
+                        f"already here but disagrees on "
+                        f"{', '.join(clash[:3])}. These are two different "
+                        f"runs under one name; neither is merged, so nothing "
+                        f"is lost -- compare them and keep the right one."
+                    )
+                    continue
+
             before = len(incoming)
             incoming, reasons = _compatible_records(existing, incoming)
             n_refused = before - len(incoming)

@@ -75,7 +75,9 @@ class TestTheArchiveStaysReachable(unittest.TestCase):
         import json
         import os
 
-        from foxrepro.storage import VARIANT_FIELDS, RunKey
+        from foxrepro.storage import (
+            OPTIONAL_VARIANT_FIELDS, VARIANT_FIELDS, RunKey,
+        )
 
         checked = 0
         for path in files:
@@ -83,10 +85,16 @@ class TestTheArchiveStaysReachable(unittest.TestCase):
                 rec = json.loads(fh.readline())
             if any(f not in rec for f in VARIANT_FIELDS):
                 continue
+            # Mirrors GenConfig._variant_fields: the optional ones are in the
+            # payload only when set, which is what keeps a control-free run's
+            # name byte-identical to what it was before `control` existed.
+            fields = {f: rec.get(f) for f in VARIANT_FIELDS}
+            fields.update({f: rec[f] for f in OPTIONAL_VARIANT_FIELDS
+                           if rec.get(f) is not None})
             key = RunKey(
                 method=rec["method"], benchmark=rec["benchmark"],
                 split=rec["split"], seed=rec["seed"], dtype=rec["dtype"],
-                variant_fields={f: rec.get(f) for f in VARIANT_FIELDS},
+                variant_fields=fields,
             )
             with self.subTest(run=os.path.basename(path)):
                 self.assertEqual(key.filename(), os.path.basename(path))

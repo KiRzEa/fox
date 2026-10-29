@@ -853,11 +853,14 @@ class TestLegacyMethodRelabelling(TestResumeAcrossCommits):
         import glob
 
         from foxrepro.bench.evaluate import read_run
-
-        self.assertEqual(
-            glob.glob("results/runs/m-vcd__*.jsonl"), [],
-            "a file is still named for the old meaning of `vcd`",
-        )
+        # `m-vcd__*` is legitimate again -- those are REAL VCD runs. The
+        # invariant is that a file's name and its records agree about which
+        # method it is, which is what resume keys on.
+        for f in sorted(glob.glob("results/runs/m-vcd__*.jsonl")):
+            with self.subTest(run=f):
+                _, meta = read_run(f, strict=False)
+                self.assertEqual(meta["method"], "vcd")
+                self.assertEqual(meta.get("method_variant"), "vcd")
         files = sorted(glob.glob("results/runs/m-vcd_fox_fusion__*.jsonl"))
         if not files:
             self.skipTest("archive not present in this checkout")

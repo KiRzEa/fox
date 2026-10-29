@@ -1298,3 +1298,109 @@ class TestIngestRefusesIncompatibleRecords(unittest.TestCase):
         rep = ingest_runs([self.inbox], self.dest)
         self.assertEqual(rep["copied"], 1)
         self.assertEqual(rep.get("rejected", 0), 0)
+
+
+class TestIngestRefusesAMismatchedFile(unittest.TestCase):
+    """Two files at one name, covering the same samples, disagreeing.
+
+    This cost 1.8 GPU-hours of finished work with no message. `vcd` meant
+    the Fox-fusion hybrid in rounds 1-5 and now means VCD, so a session zip
+    taken before the relabel carries `m-vcd__*` files whose records say
+    `vcd_fox_fusion`. Ingesting one alongside the real VCD run left
+    `incoming` empty after the sample_id filter -- every id was already
+    present -- so the compatibility check was handed nothing to object to
+    and whichever file arrived first won.
+
+    Two defences now, and this exercises both: the name/record check on
+    arrival, and compatibility tested against the WHOLE incoming file
+    before the sample_id filter rather than after it.
+    """
+
+    def setUp(self) -> None:
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.tmp = Path(td.name)
+        self.dest = self.tmp / "runs"
+        self.dest.mkdir()
+
+    def _write(self, path: Path, *, method: str, variant: str,
+               n: int = 5, **over) -> Path:
+        rows = []
+        for i in range(n):
+            r = {
+                "sample_id": f"pope/adversarial/q{i:07d}", "method": method,
+                "benchmark": "pope", "split": "adversarial", "seed": 42,
+                "dtype": "fp16", "model_id": "llava-hf/llava-1.5-7b-hf",
+                "decoding": "sampling", "prompt_template_id": "pope_v0_raw",
+                "max_new_tokens": 1, "output": "No", "label": "no",
+                "method_extra": {"variant": variant},
+                "n_gpus": 2, "gpu_name": "Tesla T4",
+            }
+            r.update(over)
+            rows.append(r)
+        path.write_text("".join(json.dumps(r, sort_keys=True) + "\n"
+                                for r in rows))
+        return path
+
+    def test_a_file_whose_records_contradict_its_name_is_refused(self) -> None:
+        from foxrepro.bench.plan import ingest_runs
+
+        src = self.tmp / "inbox"
+        src.mkdir()
+        name = "m-vcd__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-x.jsonl"
+        self._write(src / name, method="vcd_fox_fusion",
+                    variant="vcd-noise-fox-fusion")
+        rep = ingest_runs([src], self.dest)
+        self.assertEqual(rep["copied"], 0)
+        self.assertEqual(rep["rejected"], 1)
+        self.assertTrue(any("REFUSED" in f and "name says" in f
+                            for f in rep["files"]), rep["files"])
+        self.assertFalse((self.dest / name).exists())
+
+    def test_an_empty_file_is_refused(self) -> None:
+        from foxrepro.bench.plan import ingest_runs
+
+        src = self.tmp / "inbox"
+        src.mkdir()
+        (src / "m-vcd__b-pope__s-adversarial__seed-42__dt-fp16__v-x.jsonl"
+         ).write_text("")
+        rep = ingest_runs([src], self.dest)
+        self.assertEqual(rep["copied"], 0)
+        self.assertEqual(rep["rejected"], 1)
+
+    def test_a_same_name_file_that_disagrees_is_refused_not_dropped(self) -> None:
+        """The silent case: identical sample ids, different machine.
+
+        Both files cover q0000000..4, so the sample_id filter empties
+        `incoming` and the old order never reached the compatibility check.
+        """
+        from foxrepro.bench.plan import ingest_runs
+
+        name = "m-vcd__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-x.jsonl"
+        self._write(self.dest / name, method="vcd", variant="vcd", n_gpus=2)
+        src = self.tmp / "inbox"
+        src.mkdir()
+        # same samples, same name, but produced on a different host
+        self._write(src / name, method="vcd", variant="vcd", n_gpus=0,
+                    gpu_name=None)
+        rep = ingest_runs([src], self.dest)
+        self.assertEqual(rep["rejected"], 1)
+        self.assertTrue(any("disagrees on" in f for f in rep["files"]),
+                        rep["files"])
+        # and the file already there is untouched
+        kept = [json.loads(l) for l in (self.dest / name).read_text().splitlines()]
+        self.assertEqual({r["n_gpus"] for r in kept}, {2})
+
+    def test_a_compatible_continuation_still_merges(self) -> None:
+        """The guard must not refuse an ordinary resumed run."""
+        from foxrepro.bench.plan import ingest_runs
+
+        name = "m-vcd__b-pope__s-adversarial__seed-42__dt-fp16__v-sampling-x.jsonl"
+        self._write(self.dest / name, method="vcd", variant="vcd", n=3)
+        src = self.tmp / "inbox"
+        src.mkdir()
+        self._write(src / name, method="vcd", variant="vcd", n=6)
+        rep = ingest_runs([src], self.dest)
+        self.assertEqual(rep["rejected"], 0)
+        lines = (self.dest / name).read_text().splitlines()
+        self.assertEqual(len(lines), 6)

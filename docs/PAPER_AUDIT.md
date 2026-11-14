@@ -401,10 +401,12 @@ Reachable and not yet run, in descending value:
 
 | item | why it matters | rough cost |
 |---|---|---|
-| VCD + ICD, both benchmarks | the paper's own comparison, and its code cannot produce it | ~60 h |
+| ~~VCD + ICD, both benchmarks~~ | **done on POPE-adversarial and CHAIR**, from the formula, since the released code's flags are dead. The popular and random splits for VCD/ICD/SID/CausalMM are in r17 | ~~60 h~~ 22 h, in r17 |
 | ~~Figure 8, random-head control~~ | **done, r6 + r14.** The gap is 0.26 pts at k=0.10 (indistinguishable from zero), 1.37 at k=0.20, 0.79 at k=0.45 — and random heads at k=0.45 beat diagnosed heads at k=0.20. The effect is bought by *how many* heads are edited | ~~22 h~~ spent |
 | ~~Table 14 + Figure 19, fusion rule~~ | **done, r15.** The gate does nothing on POPE (`dynamic` is +0.02 over baseline, `fixed` ties `hybrid`) and the CHAIR ordering inverts — `fixed`, which the paper ranks last, is first by 16 points | ~~14.6 h~~ spent |
 | ~~Table 15, L2–13 vs L2–15~~ | **done** — equivalent at ±0.42, and r14/V8 explains why: both are early. L11–24 and L13–26, the windows r13 measured as strongest, are 3.07 and 2.24 points **worse**, and no better than not intervening at all. r15/V10 sweeps position at matched width | done; V10 in r15 |
 | Tables 4/12, query positions | measures the cost of the released `tail_n = 1`; needs cached query vectors across decode steps, which the KV cache does not keep | ~12 h |
-| Table 7, α = 0 and 3 | completes the sweep; α=0 is a sanity check on our fusion | ~5 h |
+| ~~Table 7, α = 0 and 3~~ | **done** — the shape reproduces then saturates: 79.10 / 81.83 / 82.37 / 82.37 / 82.37 for α = 0,1,2,3,4 | ~~5 h~~ spent |
+| ~~Figure 9, β axis~~ | **done** — β is *identical* at 0.05 and 0.2, and r15/V9 says why τ_JS is flat too: its gate almost never fires on POPE | spent |
+| Layer cliff: where the live region ends, and whether layer identity matters | not a paper artefact — a question r15 and r16 opened and nobody has answered | in r17 |
 | ~~Table 13, Figure 3, Figure 7~~ | **done, r13** — 0.71 s/sample, 35 min for 3000 | ~~~1 h~~ |

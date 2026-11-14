@@ -1355,6 +1355,59 @@ Gate: **20 held, 4 failed.**
 
 ---
 
+## V12 — Where does the live region end, and does layer identity matter?
+
+POPE-adversarial, sampling, seeds 42/43/44. **13.9 h** of new work, plus the
+10 jobs r16 left unfinished. Two questions, both opened by r16.
+
+### V12a — the untested boundary, starts 5, 6 and 7
+
+r16 leaves a three-layer gap. At matched width 14, L4–17 keeps 99 % of the
+effect and L8–21 keeps none of it; starts 5, 6 and 7 have never been run.
+
+**Prediction: a monotone decline across starts 4 → 8, with L7–20 clearly
+above L8–21's +0.32 and L5–18 above +2.0.**
+
+The reasoning is coverage of the layers r16 found live. Taking those as
+roughly 3–8, a window starting at 5 contains four of them, one starting at 6
+contains three, at 7 contains two, and at 8 contains one — so the decline
+should be gradual rather than another cliff edge.
+
+| outcome | reading |
+|---|---|
+| gradual monotone decline | the boundary is **coverage**, not a threshold. Consistent with r16's saturation picture and with requantisation: the more of the live region a window rounds, the more effect, with diminishing returns |
+| another sharp step, somewhere in 5–7 | **the prediction fails** and there is a genuine edge at a specific layer. That would be the first evidence in this suite for a privileged *location*, and r13's per-layer AUCs could then be asked whether they see it |
+| L7–20 at or below L8–21 | the live region ends earlier than 7, and r16's "at or before about layer 7" needs tightening to 6 |
+
+### V12b — the sharper one: are the four "adding" layers special?
+
+r16's paired steps say layers 3, 7, 8 and 12 add and that 4, 5, 6 and 9 do
+not — but r16 *also* says no layer is necessary, because those steps are
+marginals conditional on the window they are added to. Both readings fit the
+step table, and nothing run so far separates them.
+
+The direct test is to run each set **alone**, as a non-contiguous window:
+`--intervention-layers 3,7,8,12` against `4,5,6,9`.
+
+**Prediction: the two are within 0.5 points of each other, and both land
+between +1.0 and +2.2 — below L2–15's +2.59 and above L2–3's +1.22.**
+
+That is the sub-additivity reading taken seriously: if marginal value is
+path-dependent and no layer is necessary, then four early layers are four
+early layers and the labels on them do not matter.
+
+| outcome | reading |
+|---|---|
+| within 0.5 of each other | **layer identity is interchangeable.** The step table measured the order of a walk, not a property of layers. Combined with r14 (head selection worth nothing) and r15 (the gate worth nothing on POPE), the method would have no component whose *choice* has been shown to matter — only its magnitude |
+| `3,7,8,12` beats `4,5,6,9` by > 1 point | **the prediction fails and identity matters.** Some layers really are better targets. The next question is free: r13's per-layer AUCs exist, so whether the diagnosis ranks 3, 7, 8 and 12 highly can be answered with no GPU time — and if it does, that is the first thing in this audit to go the paper's way |
+| both near +2.59 | four layers are as good as fourteen, saturation is even sharper than r16 suggested, and the window width is irrelevant over a much wider range than tested |
+| both near zero | contiguity matters, not count — a scattered window breaks something a contiguous one does not. Would need its own follow-up |
+
+The second row is the one worth wanting. It is the only outcome left in this
+suite that would restore a load-bearing role to the diagnosis.
+
+---
+
 ## What this suite does **not** establish
 
 * **That our number should match the paper's.** It cannot: the paper's run

@@ -1110,6 +1110,49 @@ def _build_plan() -> List[Job]:
     # wrong. Deterministic arms are complete at n=1, and the plan already
     # said so.
 
+    # ---- Round 17 --------------------------------------------------------
+    # Two questions, both opened by r16, plus whatever r16 left unfinished --
+    # session 5 never reported and two L2-14 jobs were cut at the wall, and
+    # both are picked up automatically because resume is keyed on the run
+    # file, not on the round.
+
+    # V12a. Where exactly does the live region end?
+    # r16 left a three-layer gap: L4-17 keeps 99% of the effect and L8-21
+    # keeps none of it, and starts 5, 6 and 7 are untested. Matched width 14
+    # throughout, so only the start moves.
+    #
+    # Its OWN target, not `layer_cliff`. `pair_key` groups on target and
+    # seed, and a group cannot be split across sessions, so folding these
+    # into layer_cliff grew that group to 13 jobs -- 11.9 h against a 9 h
+    # session. tests/test_plan.py::TestPriorityPartition caught it. The
+    # separation is also honest: layer_cliff is the cumulative curve from a
+    # fixed start, this is a fixed-width window being slid.
+    for start in (5, 6, 7):
+        for seed in SEEDS_BREADTH:
+            jobs.append(Job(
+                "layer_boundary", "fox", "pope", "adversarial", seed=seed,
+                intervention_layers=f"{start}-{start + 13}",
+                note=f"V12a: the untested boundary, start L{start}",
+            ))
+
+    # V12b. Is layer IDENTITY interchangeable, or did the step table mean
+    # something? r16's paired steps say layers 3, 7, 8 and 12 add and that
+    # 4, 5, 6 and 9 do not -- but it also says no layer is necessary, because
+    # those steps are marginals conditional on the window. The direct test is
+    # to run the two sets ALONE, as non-contiguous windows.
+    #
+    # If identity matters, {3,7,8,12} beats {4,5,6,9} clearly. If the steps
+    # were pure path-dependence, the two are the same arm with different
+    # labels. Nothing else in this suite separates those two readings.
+    for layers, why in (("3,7,8,12", "the four that added"),
+                        ("4,5,6,9", "four that added nothing")):
+        for seed in SEEDS_BREADTH:
+            jobs.append(Job(
+                "layer_identity", "fox", "pope", "adversarial", seed=seed,
+                intervention_layers=layers,
+                note=f"V12b: {why}, run alone",
+            ))
+
     return jobs
 
 

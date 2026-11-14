@@ -7,7 +7,7 @@
 # quota. tests/test_plan.py::TestTheKaggleCiManifest giữ hai file này đồng bộ,
 # nên đóng băng plan lại là phải sửa cả đây.
 notebook: ml-fox-ci
-sessions: 6
+sessions: 3
 accelerator: gpu
 internet: true
 budget_hours: 10

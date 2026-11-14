@@ -637,7 +637,27 @@ Ba quy tắc rút ra từ việc mất GPU-h thật:
 
 ## 8. Còn lại gì — việc có thể nhận
 
-**r16 đã đóng băng**: 54 job, 49.5 GPU-h, **6 session, thứ tự `priority`**.
+**r17 đã đóng băng**: 25 job, 23 GPU-h, **3 session, thứ tự `priority`**.
+
+| session | nội dung | h |
+|---|---|---|
+| 1 | dọn nốt r16: 8 job Table 1 của session 5 + 2 job `L2-14` bị cắt | 9.17 |
+| 2 | **V12a** — biên của vùng sống: start 5, 6, 7 ở độ rộng 14 | 8.25 |
+| 3 | **V12b** — layer có thay thế được cho nhau không: `{3,7,8,12}` so `{4,5,6,9}` chạy **riêng** | 5.5 |
+
+Không cần release riêng để dọn r16: resume khoá theo **run file**, không theo
+round, nên plan mới tự nhặt đúng 10 job còn dở.
+
+V12b là câu hỏi sắc nhất còn lại. r16 nói layer 3, 7, 8, 12 "có đóng góp" —
+nhưng cũng nói **không layer nào cần thiết**, vì các bước nhảy đó là giá trị
+biên có điều kiện. Hai cách đọc đều khớp bảng bước nhảy, và chưa thực nghiệm
+nào tách được. Chạy riêng hai bộ bốn layer sẽ tách: ==nếu `{3,7,8,12}` hơn
+`{4,5,6,9}` trên 1 điểm thì **danh tính layer có ý nghĩa**, và đó là kết quả
+duy nhất còn lại có thể trả lại vai trò cho phần chẩn đoán.==
+
+---
+
+**r16 (đã xong)**: 54 job, 49.5 GPU-h, 6 session, `priority`.
 
 | session | nội dung | h |
 |---|---|---|

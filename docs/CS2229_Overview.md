@@ -381,12 +381,15 @@ Quét thêm độ rộng từ L2 rồi lấy hiệu, định vị được hiệ
 | 16–23 | −0.02 |
 | 24–31 | −0.24 |
 
-==**89 % hiệu ứng nằm ở layer 4–9.**== Tám layer còn lại trong cửa sổ đang
-ship là trơ, và sửa quá layer 15 thì hơi có hại. Hai sweep kiểm chéo nhau:
-L8–21 chỉ giữ được layer 8, 9 của dải sống và cho đúng +0.32.
+~~**89 % hiệu ứng nằm ở layer 4–9.**~~ — ==**r16 đã rút lại khẳng định
+này**==, xem 5.7. Phép trừ là số học đúng nhưng **không phải một phép quy
+công hợp lệ**: mỗi hiệu là giá trị biên của một layer *trong bối cảnh cửa sổ
+nó được thêm vào*, và r16 đo thấy giá trị biên đó dao động hơn một điểm tuỳ
+đường đi. Thứ còn đứng: cần một **dải layer sớm liên tục**, và hiệu ứng
+**bão hoà**. Sửa quá layer 15 thì trơ hoặc hơi có hại — cái này vẫn đúng.
 
 Hệ quả: **không có gì trong việc chọn cửa sổ của Fox là có tác dụng.** Chỉ
-cần cửa sổ phủ layer 4–9, mà cửa sổ sớm nào cũng phủ. Và r13 đo tín hiệu chẩn
+cần cửa sổ phủ đủ layer sớm, mà cửa sổ sớm nào cũng phủ. Và r13 đo tín hiệu chẩn
 đoán mạnh nhất ở **L11–26** — toàn bộ nằm trong vùng trơ.
 
 > [!warning] Lời giải thích của nhóm cũng chưa đủ
@@ -396,7 +399,73 @@ cần cửa sổ phủ layer 4–9, mà cửa sổ sớm nào cũng phủ. Và r
 > Một bậc thang ở 9–10 rồi phẳng là hiện tượng khác, và tài liệu này **chưa có
 > lời giải thích cho nó**.
 
-### 5.7 Cái cổng JSD — nửa còn lại, và nó đã đo được một phần
+### 5.7 Không layer nào là **cần thiết** — và tôi đã rút lại một khẳng định
+
+r16 đi từng layer một, đo bằng **bước nhảy ghép đôi** (L2-k so với L2-(k−1)
+trên cùng sample). Hai cửa sổ chia sẻ gần hết nên bước nhảy đo chính xác hơn
+nhiều (±0.2) so với khoảng tin cậy của từng cửa sổ với `off` (±0.45).
+
+| layer k | bước nhảy | 90 % CI | |
+|---|---|---|---|
+| 3 | **+1.12** | [+0.88, +1.37] | có |
+| 4 | −0.10 | [−0.30, +0.09] | không |
+| 5 | −0.18 | [−0.37, +0.01] | không |
+| 6 | −0.01 | [−0.18, +0.16] | không |
+| 7 | **+0.60** | [+0.40, +0.81] | có |
+| 8 | **+0.71** | [+0.49, +0.93] | có |
+| 9, 10 | +0.08, +0.08 | chứa 0 | không |
+| 11 | −0.18 | [−0.32, −0.02] | **âm** |
+| 12 | **+0.43** | [+0.24, +0.62] | có |
+| 13–15 | −0.09, +0.06, −0.08 | chứa 0 | không |
+
+Nhưng — và đây mới là chỗ quan trọng — **không layer nào là cần thiết**:
+
+| cửa sổ | layer | vs `off` |
+|---|---|---|
+| L2–3 | chỉ 2, 3 | **+1.22** |
+| L4–17 | 4…17, **không có 2, 3** | **+2.57** |
+| L2–15 | 2…15 | +2.59 |
+| L2–6 | 2…6, **không có 7, 8** | +0.93 |
+| L8–21 | 8…21, **không có 2–7** | +0.32 |
+
+Layer 3 đáng +1.12 khi nó là layer thứ hai trong cửa sổ, và đáng **+0.02**
+khi 4–15 đã có sẵn. L4–17 bỏ cả hai layer mà bảng bước nhảy làm ra vẻ quý
+nhất, vẫn giữ 99 % hiệu ứng.
+
+Nói bằng số: L2–3 (+1.22) cộng L4–17 (+2.57) sẽ là +3.79 **nếu cộng được**.
+Đo thật, L2–15 cho **+2.59** — hụt **−1.20**, gần nửa tổng hiệu ứng.
+==Hiệu ứng **dưới-cộng tính** mạnh.==
+
+> [!warning] Rút lại "89 % hiệu ứng nằm ở layer 4–9" của r15
+> Con số đó đến từ phép trừ các cửa sổ tích luỹ. **Số học đúng** — tổng
+> telescoping dọc một đường đi là chính xác — nhưng **quy công thì sai**.
+> Những hiệu đó là giá trị biên *trong bối cảnh cụ thể*, và r16 cho thấy nó
+> đổi hơn một điểm tuỳ đường đi. Đọc chúng như "tầm quan trọng nội tại của
+> từng layer" là lỗi của tôi, ở commit `f9e0916`.
+>
+> Thứ còn đứng, yếu hơn và khác: **cần một dải layer sớm bắt đầu từ khoảng
+> layer 7 trở về trước, và hiệu ứng bão hoà khi đã đủ.** Layer nào cụ thể thì
+> phần lớn là thay thế được cho nhau.
+
+Với ba cách giải thích:
+
+- **Paper không khá hơn.** Tín hiệu chẩn đoán vẫn đỉnh ở L11–26, mà layer
+  9, 10, 13, 14, 15 đo được là **không đóng góp gì**, layer 11 còn hơi âm.
+  Không gì trong phần chẩn đoán dự đoán được layer 3, 7, 8.
+- **Cách giải thích "độ sâu" của nhóm giờ **sai hẳn**,** không chỉ là thiếu
+  bằng chứng. Lan truyền theo độ sâu thì phải giảm đơn điệu theo chỉ số
+  layer. Layer 4–6 không đóng góp gì trong khi 7 và 8 góp 1.31 — không phải
+  giảm dần.
+- **Requantisation hợp nhất trong ba.** Nếu cơ chế là làm tròn fp16 các
+  logit attention thì cái quan trọng là **đủ nhiều** layer sớm bị làm tròn,
+  không phải layer nào — và hiệu ứng phải bão hoà. Nó bão hoà, rất gắt, và
+  tính dưới-cộng chính là hình dạng của bão hoà.
+
+Vẫn **chưa ai giải thích được** vì sao vùng sống kết thúc quanh layer 7–8.
+r16 thu hẹp câu hỏi chứ không đóng nó: khoảng chưa đo giờ là start 5, 6, 7 —
+giữa L4–17 (chạy được) và L8–21 (không).
+
+### 5.8 Cái cổng JSD — nửa còn lại, và nó đã đo được một phần
 
 Mọi phép đo ở trên đều nhắm vào **phần chẩn đoán**. Nhưng cái còn lại để giải
 thích Fox là **luật hợp nhất**: `fox off` giữ nguyên dual pass và fusion, tắt
@@ -464,14 +533,16 @@ can thiệp mua 0.73 điểm CHAIR_S bằng 2.8 điểm recall.
 
 ## 6. Tình trạng hiện tại
 
-- **304/304 job đã chạy — plan rỗng.** r15 xong (39 job, 10 session, 0 lỗi); V9 và V10 đã chấm, xem 5.6 và 5.7.
+- **348/358 job đã chạy.** r16 về 5/6 session: **V11 đã chấm đủ** (xem 5.7), còn Table 1 thiếu 8 job vì **session 5 không về**.
+- Hai job `L2-14` (seed 43, 44) bị cắt ở tường session (`rc = -15`), còn 2972/3000 và 2599/3000 record. Đã ghép đôi trên phần giao nên vẫn dùng được; cả hai bước nhảy liên quan đều không có ý nghĩa thống kê.
+- Gate kiểm chứng: **20 đúng / 4 sai**.
 - Hàng đợi `pending` của bot **đã chạy qua trên GPU thật**: 10 session khai
   báo, 4 chạy ngay (2 account còn quota × trần 2 session), **6 xếp hàng** và
   được cron đẩy dần khi có chỗ. Cả 10 đều xong, 0 lỗi. Trước đó nhánh này mới
   chỉ kiểm ở độ sâu 1 trên notebook CPU. Xem [[kaggle-ci-pipeline]].
-- Gate kiểm chứng: **20 đúng / 3 sai**. Cả ba cái sai đều là dự đoán của
-  nhóm, không phải bug: `cf_blind` (5.3), **V8** và **V10** (5.6) — và hai
-  cái sau mới là các kết quả có giá trị nhất.
+  Cả bốn cái sai đều là dự đoán của nhóm, không phải bug: `cf_blind` (5.3),
+  **V8**, **V10** (5.6) và **V11** (5.7) — và V11 sai còn kéo theo việc rút
+  lại một khẳng định r15 đã viết.
 - Mọi **baseline** POPE khớp paper trong 0.05 điểm → harness, dữ liệu, protocol
   đều đúng. Những gì đo được là về phương pháp, không phải về setup.
 

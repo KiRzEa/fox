@@ -179,8 +179,10 @@ answer — either would.
 | POPE-adv, sampling, 3 seeds | 81.53 | 81.56 |
 | CHAIR_S, greedy | 42.80 (recall 76.09) | 46.20 (recall 77.82) |
 
-r15/V10 explains why: both windows cover layers 4–9, which carry 89 % of the
-effect, so trimming two layers off the far end changes nothing. The CHAIR
+r15/V10 explains why: both windows cover the early region that carries the
+effect, so trimming two layers off the far end changes nothing. (r15 put a
+figure of "89 % in layers 4–9" on this; r16 retracted it — the effect is
+sub-additive, so no band owns a fixed share.) The CHAIR
 difference runs the other way and comes with 1.7 points less recall.
 
 ### Table 13 — prior-source diagnostic — **DONE, r13**
@@ -232,9 +234,13 @@ early-to-mid run above threshold to keep: the signal is mid-to-late.
 cliff.** Starts at L0, L2 and L4 are mutually indistinguishable and all give
 the full +2.6 over `fox off`; starts at L8 and later give nothing
 distinguishable from not intervening, flat to the end of the model.
-Differencing against a width sweep localises **89 % of the effect to layers
-4–9**. Since Figure 7's signal peaks at L11–26 — inside the inert region —
-the quantity this figure plots does not predict where intervening helps.
+r16 then walked the window one layer at a time and found the effect is
+**sub-additive**: L4–17 drops layers 2–3 and keeps 99 %, L2–3 drops 4–15 and
+keeps 47 %, and the two together give less than either sum implies by 1.20
+points. **No layer is necessary**; a run of early layers is, and it saturates.
+Since Figure 7's signal peaks at L11–26, and layers 9–15 are measured as
+adding nothing (layer 11 slightly negative), the quantity this figure plots
+still does not predict where intervening helps.
 
 **r14 first intervened on the two windows this figure's rule selects, and
 they do not work.** L11–24 is

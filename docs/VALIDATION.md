@@ -1095,9 +1095,14 @@ Differencing the two sweeps localises the effect to six layers:
 
 The two sweeps cross-check independently: L8–21 retains only layers 8 and 9
 of the live band and scores +0.32, the size the width sweep implies for that
-tail. **Roughly 89 % of the intervention's contribution comes from layers
-4–9.** Everything else in the shipped 14-layer window is inert, and editing
-past layer 15 is slightly harmful.
+tail. ~~**Roughly 89 % of the intervention's contribution comes from layers
+4–9.**~~ — **retracted by r16.** The differencing is exact arithmetic but not
+a valid attribution: each difference is the marginal value of a layer *given
+the window it is added to*, and r16 measures that marginal swinging by over a
+point with the path. L4–17 excludes layers 2–3 and keeps 99 % of the effect;
+L2–3 excludes 4–9 and keeps 47 %. What survives is that an early run of
+layers is needed and that the effect saturates. That everything past layer 15
+is inert or slightly harmful does survive.
 
 The second clause of the prediction also fails, narrowly: L2–5 recovers
 **0.36** of L2–15's gain, not the "more than half" predicted. It fails for a
@@ -1183,8 +1188,10 @@ conclusion survives its prediction failing:
 * **Width does not matter either**, past layer 9. Fourteen layers, twenty-two
   layers and the first eight are all within 0.27 of each other;
 * **So nothing in Fox's window selection is doing work.** The only thing that
-  matters is whether the window covers layers 4–9, and every early window
-  does.
+  matters is whether the window covers enough early layers, and every early
+  window does. (r15 wrote "layers 4–9" here; r16 retracts the specific band —
+  the effect is sub-additive, so no band owns a fixed share — while the
+  conclusion itself stands.)
 
 Against the paper that is the strongest statement this suite has produced.
 r13 measured the diagnostic signal — the quantity Figure 7 plots and the
@@ -1247,6 +1254,104 @@ The fourth row is a real possibility and is why the prediction names a
 resolution. If consecutive differences are all inside ±0.4 the curve will not
 support per-layer claims, and this document should say the cliff is located
 between k = 9 and k = 15 and no more precisely.
+
+---
+
+## Results, round 16 (2026-11-14) — no layer is necessary, and r15's attribution does not survive
+
+30 of 30 cliff jobs returned (two of them partial at the session wall: L2–14
+at seeds 43 and 44, 2972 and 2599 of 3000, paired on the intersection
+throughout). Session 5 did not come back, so Table 1's completion is 16 of 24
+jobs and is reported separately below. POPE-adversarial, sampling, seeds
+42/43/44, against `fox off`.
+
+**V11's prediction fails on both clauses, and the failure is larger than the
+prediction.** It also falsifies a claim this document made in r15.
+
+### The curve, and what each layer adds
+
+The right statistic is the **paired step** — L2-k against L2-(k−1) on the same
+samples. The two windows share almost everything, so the step is measured far
+more precisely (±0.2) than either window's own interval against `off` (±0.45).
+
+| layer k | step | 90 % CI | verdict |
+|---|---|---|---|
+| 3 | **+1.12** | [+0.88, +1.37] | adds |
+| 4 | −0.10 | [−0.30, +0.09] | nothing |
+| 5 | −0.18 | [−0.37, +0.01] | nothing |
+| 6 | −0.01 | [−0.18, +0.16] | nothing |
+| 7 | **+0.60** | [+0.40, +0.81] | adds |
+| 8 | **+0.71** | [+0.49, +0.93] | adds |
+| 9 | +0.08 | [−0.06, +0.21] | nothing |
+| 10 | +0.08 | [−0.08, +0.23] | nothing |
+| 11 | −0.18 | [−0.32, −0.02] | **negative** |
+| 12 | **+0.43** | [+0.24, +0.62] | adds |
+| 13, 14, 15 | −0.09, +0.06, −0.08 | all span 0 | nothing |
+
+Predicted: a roughly linear rise from k = 4 to k = 9 at 0.3–0.5 per layer, and
+no single layer above 0.8. Measured: layers 4, 5 and 6 add **nothing**, layer
+3 adds **+1.12**, and the layers that do add are 3, 7, 8 and 12.
+
+### But no layer is necessary, because the effect is sub-additive
+
+| window | layers | vs `fox off` |
+|---|---|---|
+| L2–3 | 2, 3 only | **+1.22** |
+| L4–17 | 4…17, **no 2 or 3** | **+2.57** |
+| L2–15 | 2…15 | +2.59 |
+| L2–6 | 2…6, **no 7 or 8** | +0.93 |
+| L8–21 | 8…21, **no 2–7** | +0.32 |
+
+Layer 3 is worth +1.12 when it is the second layer in the window and **+0.02**
+when layers 4–15 are already there. L4–17 drops both of the layers the step
+table makes look most valuable and keeps 99 % of the effect. Two layers alone
+get 47 % of what fourteen get.
+
+Additivity, stated as a number: L2–3 (+1.22) plus L4–17 (+2.57) would be
++3.79 if the contributions added. Measured together, L2–15 gives **+2.59** —
+a shortfall of **−1.20**, almost half the total effect.
+
+> [!warning] This retracts r15's "89 % of the effect is in layers 4–9"
+> That figure came from differencing cumulative windows (L2–5, L2–9, L2–15).
+> The **arithmetic was right** — a telescoping sum along one path is exact —
+> but the **attribution was not**. Those differences are the marginal value of
+> each layer *given the particular layers already in the window*, and r16
+> shows that marginal value swings by more than a point depending on the
+> path. Reading them as intrinsic per-layer importance was the error, and it
+> was mine, in `f9e0916`.
+>
+> What survives is weaker and different: **the intervention needs a run of
+> early layers beginning at or before about layer 7, and saturates once it
+> has enough of them.** Which particular layers is largely interchangeable.
+
+### What that does to the three accounts
+
+* **The paper's localisation story is no better off.** Its diagnostic still
+  peaks at L11–26, and layers 9, 10, 13, 14, 15 are measured here as adding
+  nothing while 11 is slightly negative. Nothing in the diagnosis predicts
+  layers 3, 7, 8;
+* **Our depth story is now clearly wrong**, not merely unsupported. Depth of
+  propagation predicts monotone decay in layer index. Layers 4–6 adding
+  nothing while 7 and 8 add 1.31 between them is not decay;
+* **Requantisation fits best of the three.** If the mechanism is fp16
+  rounding of attention logits, then what matters is that *enough* early
+  layers are rounded, not which — and the effect should saturate. It does,
+  sharply, and the sub-additivity is what saturation looks like.
+
+None of that is a positive account of why the live region ends around layer
+7–8. This suite still does not have one, and r16 narrows the question rather
+than closing it: the untested gap is now starts at 5, 6 and 7, between L4–17
+which works and L8–21 which does not.
+
+### Table 1 — 16 of 24, because session 5 did not return
+
+VCD, ICD, SID and CausalMM on the popular and random splits: two of the three
+seed-sessions came back. The eight missing jobs are one seed of each
+method × split pair. Not a failure of the arm — the session never reported —
+so re-releasing the same frozen plan picks up exactly those eight and nothing
+else, since resume is keyed on the run file.
+
+Gate: **20 held, 4 failed.**
 
 ---
 
